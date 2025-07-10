@@ -131,7 +131,7 @@ func Validate(config *Config) error {
 func SaveProjectSelection(projectPath string) error {
 	// Create or update .env file with the selected project
 	envFile := ".env"
-	
+
 	// Read existing .env file if it exists
 	existingVars := make(map[string]string)
 	if file, err := os.Open(envFile); err == nil {
@@ -160,8 +160,8 @@ func SaveProjectSelection(projectPath string) error {
 	defer file.Close()
 
 	// Write comment header
-	fmt.Fprintln(file, "# Peter GitLab Automation Configuration")
-	fmt.Fprintln(file, "# Generated automatically - you can edit these values")
+	fmt.Fprintln(file, "# automagic GitLab Automation Configuration")
+	fmt.Fprintln(file, "# Generated automagically - you can edit these values")
 	fmt.Fprintln(file, "")
 
 	// Write all variables in a logical order
@@ -203,9 +203,9 @@ func PrintConfig(config *Config) {
 	fmt.Printf("  Claude Flags: %s\n", config.Claude.Flags)
 	fmt.Printf("  Default Project: %s\n", config.Projects.DefaultPath)
 	fmt.Printf("  Daemon Interval: %d seconds\n", config.Daemon.Interval)
-	fmt.Printf("  Labels: %s → %s → %s\n", 
-		config.Daemon.ClaudeLabel, 
-		config.Daemon.ProcessLabel, 
+	fmt.Printf("  Labels: %s → %s → %s\n",
+		config.Daemon.ClaudeLabel,
+		config.Daemon.ProcessLabel,
 		config.Daemon.ReviewLabel)
 }
 

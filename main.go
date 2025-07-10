@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bilbo290/automatic/pkg/claude"
-	"github.com/bilbo290/automatic/pkg/config"
-	"github.com/bilbo290/automatic/pkg/daemon"
-	"github.com/bilbo290/automatic/pkg/gitlab"
+	"github.com/bilbo290/automagic/pkg/claude"
+	"github.com/bilbo290/automagic/pkg/config"
+	"github.com/bilbo290/automagic/pkg/daemon"
+	"github.com/bilbo290/automagic/pkg/gitlab"
 )
 
 func generateConfigTemplate() error {
-	template := `# Peter GitLab Automation Configuration
+	template := `# automagic GitLab Automation Configuration
 # Edit these values with your GitLab credentials and preferences
 
 # GitLab Configuration (REQUIRED)
@@ -186,7 +186,7 @@ func runInteractiveWorkflow(gitlabClient *gitlab.Client, cfg *config.Config) err
 	if err := config.SaveProjectSelection(selectedProject.PathWithNamespace); err != nil {
 		fmt.Printf("Warning: Could not save project selection: %v\n", err)
 	} else {
-		fmt.Printf("Project selection saved to peter.yaml\n")
+		fmt.Printf("Project selection saved to automagic.yaml\n")
 	}
 
 	// Step 2: Select label filter
@@ -646,24 +646,24 @@ func main() {
 
 	if issueNumber == 0 {
 		fmt.Println("Error: Please provide an issue number using -issue flag")
-		fmt.Println("Usage: peter -issue 123")
-		fmt.Println("       peter -issue 123 -dry-run")
-		fmt.Println("       peter -issue 123 -semi-dry-run")
-		fmt.Println("       peter -generate-config")
-		fmt.Println("       peter -list-projects")
-		fmt.Println("       peter -search backend")
-		fmt.Println("       peter -interactive")
-		fmt.Println("       peter -list-issues")
-		fmt.Println("       peter -list-issues -label open")
-		fmt.Println("       peter -select-issue")
-		fmt.Println("       peter -select-issue -label solved")
-		fmt.Println("       peter -daemon")
-		fmt.Println("       peter -daemon -memory")
-		fmt.Println("       peter -daemon -dry-run")
-		fmt.Println("       peter -daemon -semi-dry-run")
-		fmt.Println("       peter -test-labels")
-		fmt.Println("       peter -debug-mcp")
-		fmt.Println("       peter -status")
+		fmt.Println("Usage: automagic -issue 123")
+		fmt.Println("       automagic -issue 123 -dry-run")
+		fmt.Println("       automagic -issue 123 -semi-dry-run")
+		fmt.Println("       automagic -generate-config")
+		fmt.Println("       automagic -list-projects")
+		fmt.Println("       automagic -search backend")
+		fmt.Println("       automagic -interactive")
+		fmt.Println("       automagic -list-issues")
+		fmt.Println("       automagic -list-issues -label open")
+		fmt.Println("       automagic -select-issue")
+		fmt.Println("       automagic -select-issue -label solved")
+		fmt.Println("       automagic -daemon")
+		fmt.Println("       automagic -daemon -memory")
+		fmt.Println("       automagic -daemon -dry-run")
+		fmt.Println("       automagic -daemon -semi-dry-run")
+		fmt.Println("       automagic -test-labels")
+		fmt.Println("       automagic -debug-mcp")
+		fmt.Println("       automagic -status")
 		os.Exit(1)
 	}
 
