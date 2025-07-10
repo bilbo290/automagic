@@ -239,19 +239,40 @@ func (c *Client) GetIssueDiscussions(projectPath string, issueIID int) ([]Discus
 
 func (c *Client) GetIssueDiscussionsWithContext(ctx context.Context, projectPath string, issueIID int) ([]Discussion, error) {
 	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
-	endpoint := fmt.Sprintf("/projects/%s/issues/%d/discussions", encodedPath, issueIID)
+	
+	var allDiscussions []Discussion
+	page := 1
+	perPage := 100 // Get more items per page
+	
+	for {
+		endpoint := fmt.Sprintf("/projects/%s/issues/%d/discussions?per_page=%d&page=%d", encodedPath, issueIID, perPage, page)
 
-	body, err := c.makeRequestWithContext(ctx, endpoint)
-	if err != nil {
-		return nil, err
+		body, err := c.makeRequestWithContext(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		var discussions []Discussion
+		if err := json.Unmarshal(body, &discussions); err != nil {
+			return nil, fmt.Errorf("failed to parse discussions: %v", err)
+		}
+
+		allDiscussions = append(allDiscussions, discussions...)
+		
+		// If we got fewer items than per_page, we've reached the end
+		if len(discussions) < perPage {
+			break
+		}
+		
+		page++
+		
+		// Safety check to prevent infinite loops (max 50 pages = 5000 discussions)
+		if page > 50 {
+			break
+		}
 	}
 
-	var discussions []Discussion
-	if err := json.Unmarshal(body, &discussions); err != nil {
-		return nil, fmt.Errorf("failed to parse discussions: %v", err)
-	}
-
-	return discussions, nil
+	return allDiscussions, nil
 }
 
 func (c *Client) GetIssueCommentsAfter(projectPath string, issueIID int, afterTime time.Time) ([]Note, error) {

@@ -801,7 +801,7 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 
 	// List all review issues for debugging
 	for i, issue := range issues {
-		fmt.Printf("[%s] DEBUG: Review issue %d: #%d - %s\n", timestamp, i+1, issue.IID, issue.Title)
+		fmt.Printf("[%s] DEBUG: Review issue %d: #%d - %s (labels: %v)\n", timestamp, i+1, issue.IID, issue.Title, issue.Labels)
 	}
 
 	newSessions := 0
@@ -822,8 +822,8 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 		// Get the latest comments to check if last comment is from human
 		fmt.Printf("[%s] DEBUG: Checking latest comments for issue #%d\n", timestamp, issue.IID)
 
-		// Add a small delay to handle potential API caching/replication delays
-		time.Sleep(1 * time.Second)
+		// Add a longer delay to handle potential API caching/replication delays
+		time.Sleep(3 * time.Second)
 
 		// Create a timeout context for comment checking
 		commentCtx, commentCancel := context.WithTimeout(ctx, 8*time.Second)
@@ -839,14 +839,14 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 			fmt.Printf("[%s] DEBUG: Fetching discussions for issue #%d\n", timestamp, issue.IID)
 
 			// Get all discussions/comments for this issue
-			discussions, err := d.gitlabClient.GetIssueDiscussions(d.selectedProject, issue.IID)
+			discussions, err := d.gitlabClient.GetIssueDiscussionsWithContext(commentCtx, d.selectedProject, issue.IID)
 			if err != nil {
 				fmt.Printf("[%s] DEBUG: Error fetching discussions for issue #%d: %v\n", timestamp, issue.IID, err)
 				commentCh <- commentResult{comments: nil, err: err}
 				return
 			}
 
-			fmt.Printf("[%s] DEBUG: Issue #%d has %d discussions\n", timestamp, issue.IID, len(discussions))
+			fmt.Printf("[%s] DEBUG: Issue #%d has %d discussions (fetched at %s)\n", timestamp, issue.IID, len(discussions), time.Now().Format("15:04:05"))
 
 			// Flatten all notes from all discussions and filter out system notes
 			var allNotes []gitlab.Note
@@ -897,6 +897,27 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 		}
 
 		fmt.Printf("[%s] DEBUG: Issue #%d has %d total comments (non-system)\n", timestamp, issue.IID, len(comments))
+		
+		// If we expected more comments, try a direct API call to double-check
+		if len(comments) < 14 { // You mentioned you added a comment, so should be > 13
+			fmt.Printf("[%s] DEBUG: Expected more comments, trying direct API call...\n", timestamp)
+			directDiscussions, directErr := d.gitlabClient.GetIssueDiscussions(d.selectedProject, issue.IID)
+			if directErr == nil {
+				var directNotes []gitlab.Note
+				for _, discussion := range directDiscussions {
+					for _, note := range discussion.Notes {
+						if !note.System {
+							directNotes = append(directNotes, note)
+						}
+					}
+				}
+				fmt.Printf("[%s] DEBUG: Direct API call found %d comments (was %d)\n", timestamp, len(directNotes), len(comments))
+				if len(directNotes) > len(comments) {
+					comments = directNotes
+					fmt.Printf("[%s] DEBUG: Using direct API results\n", timestamp)
+				}
+			}
+		}
 
 		// Show the last few comments for debugging
 		if len(comments) > 0 {
@@ -932,9 +953,10 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 				isBotComment = true
 			}
 			
-			// Also check against configured username as fallback
-			botUsername := d.config.GitLab.Username
-			if lastComment.Author.Username == botUsername {
+			// Only check against configured username if it contains "bot" 
+			// (to avoid matching human usernames that happen to be in config)
+			botUsername := strings.ToLower(d.config.GitLab.Username)
+			if strings.Contains(botUsername, "bot") && lastComment.Author.Username == d.config.GitLab.Username {
 				isBotComment = true
 			}
 			
@@ -949,9 +971,28 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 
 			// Check if this comment is newer than the last one we processed
 			lastProcessedTime, hasProcessedBefore := d.lastCommentTime[issue.IID]
-			isNewerComment := !hasProcessedBefore || lastComment.CreatedAt > lastProcessedTime
+			
+			// Parse timestamps for proper comparison
+			var isNewerComment bool
+			if !hasProcessedBefore {
+				isNewerComment = true
+				fmt.Printf("[%s] DEBUG: Issue #%d - never processed before, treating as new\n", timestamp, issue.IID)
+			} else {
+				// Parse both timestamps for proper comparison
+				lastTime, err1 := time.Parse(time.RFC3339, lastProcessedTime)
+				currentTime, err2 := time.Parse(time.RFC3339, lastComment.CreatedAt)
+				
+				if err1 != nil || err2 != nil {
+					// Fallback to string comparison if parsing fails
+					isNewerComment = lastComment.CreatedAt > lastProcessedTime
+					fmt.Printf("[%s] DEBUG: Issue #%d - timestamp parse failed, using string comparison\n", timestamp, issue.IID)
+				} else {
+					isNewerComment = currentTime.After(lastTime)
+					fmt.Printf("[%s] DEBUG: Issue #%d - parsed timestamp comparison\n", timestamp, issue.IID)
+				}
+			}
 
-			fmt.Printf("[%s] DEBUG: Issue #%d - last processed: %s, current: %s, newer: %v\n",
+			fmt.Printf("[%s] DEBUG: Issue #%d - last processed: '%s', current: '%s', newer: %v\n",
 				timestamp, issue.IID, lastProcessedTime, lastComment.CreatedAt, isNewerComment)
 
 			if isHumanComment && isNewerComment {
