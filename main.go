@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -225,30 +226,42 @@ func runInteractiveWorkflow(gitlabClient *gitlab.Client, cfg *config.Config) err
 }
 
 func processIssue(issueNumber int, cfg *config.Config) error {
-	return processIssueWithOptions(issueNumber, cfg, false)
+	return processIssueWithOptions(issueNumber, cfg, false, false)
 }
 
-func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool) error {
+func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool, semiDryRun bool) error {
 	processManager := claude.NewProcessManager()
 
 	fmt.Printf("Processing issue #%d...\n", issueNumber)
 
 	processID := fmt.Sprintf("issue-%d-%d", issueNumber, time.Now().Unix())
 
-	process, err := claude.CreateProcess(
+	// For semi-dry-run, we want to clone but not execute
+	actualDryRun := dryRun || semiDryRun
+	
+	process, err := claude.CreateProcessWithCallbackAndGitlabDryRun(
 		issueNumber,
 		processID,
 		cfg.Claude.Command,
 		cfg.Claude.Flags,
 		cfg.Projects.DefaultPath,
 		cfg.GitLab.Username,
+		cfg.GitLab.URL,
+		dryRun, // Only pass true dry-run for repository cloning
+		nil,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("error creating claude process: %v", err)
 	}
 
-	if dryRun {
-		fmt.Println("\n=== DRY RUN MODE ===")
+	if actualDryRun {
+		if dryRun {
+			fmt.Println("\n=== DRY RUN MODE ===")
+		} else {
+			fmt.Println("\n=== SEMI-DRY RUN MODE ===")
+			fmt.Println("Repository has been cloned/verified.")
+		}
 		fmt.Printf("Working Directory: %s\n", process.Cmd.Dir)
 		fmt.Printf("Command: %s\n", process.Cmd.Path)
 		fmt.Printf("Arguments: %v\n", process.Cmd.Args)
@@ -260,7 +273,41 @@ func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool) e
 				break
 			}
 		}
-		fmt.Println("\n=== END DRY RUN ===")
+		if dryRun {
+			fmt.Println("=== END DRY RUN ===")
+		} else {
+			fmt.Println("=== END SEMI-DRY RUN ===")
+			
+			// Additional checks in semi-dry-run mode
+			fmt.Println("\n=== REPOSITORY STATUS ===")
+			// Run git status in the repository directory
+			statusCmd := exec.Command("git", "status", "--short")
+			statusCmd.Dir = process.Cmd.Dir
+			if output, err := statusCmd.Output(); err == nil {
+				if len(output) == 0 {
+					fmt.Println("Git status: Clean working directory")
+				} else {
+					fmt.Printf("Git status:\n%s", output)
+				}
+			}
+			
+			// Show current branch
+			branchCmd := exec.Command("git", "branch", "--show-current")
+			branchCmd.Dir = process.Cmd.Dir
+			if output, err := branchCmd.Output(); err == nil {
+				fmt.Printf("Current branch: %s", output)
+			}
+			
+			// In semi-dry-run mode, show what cleanup would do
+			fmt.Printf("\n=== REPOSITORY CLEANUP ===\n")
+			fmt.Printf("After Claude finishes, the following cleanup would occur:\n")
+			fmt.Printf("- Reset any uncommitted changes (git reset --hard HEAD)\n")
+			fmt.Printf("- Remove untracked files (git clean -fd)\n")
+			fmt.Printf("- Switch back to main branch\n")
+			fmt.Printf("- Delete any issue-* branches\n")
+			fmt.Printf("- Pull latest changes\n")
+			fmt.Printf("Repository will be ready for the next parallel session\n")
+		}
 		return nil
 	}
 
@@ -376,6 +423,7 @@ func main() {
 	var debugMCP bool
 	var processStatus bool
 	var dryRun bool
+	var semiDryRun bool
 	flag.IntVar(&issueNumber, "issue", 0, "GitLab issue number to process")
 	flag.BoolVar(&listProjects, "list-projects", false, "List accessible GitLab projects")
 	flag.StringVar(&searchQuery, "search", "", "Search for projects by name")
@@ -388,7 +436,16 @@ func main() {
 	flag.BoolVar(&debugMCP, "debug-mcp", false, "Debug MCP (Model Context Protocol) integration")
 	flag.BoolVar(&processStatus, "status", false, "Show process status (requires daemon mode)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Show the prompt that would be sent to Claude without executing")
+	flag.BoolVar(&semiDryRun, "semi-dry-run", false, "Clone repository and show prompt without executing Claude")
 	flag.Parse()
+
+	// Check for conflicting flags
+	if dryRun && semiDryRun {
+		fmt.Println("Error: Cannot use both -dry-run and -semi-dry-run flags together")
+		fmt.Println("  -dry-run: Shows what would happen without any changes")
+		fmt.Println("  -semi-dry-run: Clones repository but doesn't run Claude")
+		os.Exit(1)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -454,6 +511,8 @@ func main() {
 		var d *daemon.Daemon
 		if dryRun {
 			d = daemon.NewWithDryRun(gitlabClient, cfg, true)
+		} else if semiDryRun {
+			d = daemon.NewWithSemiDryRun(gitlabClient, cfg)
 		} else {
 			d = daemon.New(gitlabClient, cfg)
 		}
@@ -549,6 +608,7 @@ func main() {
 		fmt.Println("Error: Please provide an issue number using -issue flag")
 		fmt.Println("Usage: go run main.go -issue 123")
 		fmt.Println("       go run main.go -issue 123 -dry-run")
+		fmt.Println("       go run main.go -issue 123 -semi-dry-run")
 		fmt.Println("       go run main.go -list-projects")
 		fmt.Println("       go run main.go -search backend")
 		fmt.Println("       go run main.go -interactive")
@@ -558,13 +618,14 @@ func main() {
 		fmt.Println("       go run main.go -select-issue -label solved")
 		fmt.Println("       go run main.go -daemon")
 		fmt.Println("       go run main.go -daemon -dry-run")
+		fmt.Println("       go run main.go -daemon -semi-dry-run")
 		fmt.Println("       go run main.go -test-labels")
 		fmt.Println("       go run main.go -debug-mcp")
 		fmt.Println("       go run main.go -status")
 		os.Exit(1)
 	}
 
-	if err := processIssueWithOptions(issueNumber, cfg, dryRun); err != nil {
+	if err := processIssueWithOptions(issueNumber, cfg, dryRun, semiDryRun); err != nil {
 		fmt.Printf("Error processing issue: %v\n", err)
 		os.Exit(1)
 	}

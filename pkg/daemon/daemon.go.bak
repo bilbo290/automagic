@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
-	"strings"
 	"syscall"
 	"time"
 
@@ -22,47 +20,15 @@ type Daemon struct {
 	config          *config.Config
 	selectedProject string
 	processManager  *claude.ProcessManager
-	sessionStore    session.Store
+	sessionStore    *session.SessionStore
 	resumeProcesses map[int]*exec.Cmd // Track resume processes by issue ID
 	dryRun          bool
 	semiDryRun      bool
 }
 
 func New(gitlabClient *gitlab.Client, config *config.Config) *Daemon {
-	var sessionStore session.Store
-	
-	sqliteStore, err := session.NewSQLiteSessionStore("")
-	if err != nil {
-		fmt.Printf("Warning: Failed to create SQLite session store, falling back to JSON store: %v\n", err)
-		// Fallback to JSON store
-		jsonStore := session.NewSessionStore("")
-		jsonStore.Load() // Load existing sessions, ignore errors
-		sessionStore = jsonStore
-	} else {
-		sessionStore = sqliteStore
-		// Try to migrate from old JSON store if it exists
-		jsonStore := session.NewSessionStore("")
-		if jsonStore.Load() == nil {
-			fmt.Printf("Migrating sessions from JSON to SQLite...\n")
-			if err := sqliteStore.MigrateFromJSONStore(jsonStore); err != nil {
-				fmt.Printf("Warning: Failed to migrate sessions: %v\n", err)
-			} else {
-				fmt.Printf("Successfully migrated sessions to SQLite\n")
-			}
-		}
-		
-		// Clean up invalid and old sessions
-		fmt.Printf("Cleaning up invalid session IDs...\n")
-		if err := sqliteStore.CleanupInvalidSessions(); err != nil {
-			fmt.Printf("Warning: Failed to cleanup invalid sessions: %v\n", err)
-		}
-		
-		// Clean up sessions older than 7 days (Claude sessions likely expire)
-		fmt.Printf("Cleaning up old sessions...\n")
-		if err := sqliteStore.CleanupOldSessions(7 * 24 * time.Hour); err != nil {
-			fmt.Printf("Warning: Failed to cleanup old sessions: %v\n", err)
-		}
-	}
+	sessionStore := session.NewSessionStore("")
+	sessionStore.Load() // Load existing sessions, ignore errors
 	
 	return &Daemon{
 		gitlabClient:    gitlabClient,
@@ -75,18 +41,8 @@ func New(gitlabClient *gitlab.Client, config *config.Config) *Daemon {
 }
 
 func NewWithDryRun(gitlabClient *gitlab.Client, config *config.Config, dryRun bool) *Daemon {
-	var sessionStore session.Store
-	
-	sqliteStore, err := session.NewSQLiteSessionStore("")
-	if err != nil {
-		fmt.Printf("Warning: Failed to create SQLite session store, falling back to JSON store: %v\n", err)
-		// Fallback to JSON store
-		jsonStore := session.NewSessionStore("")
-		jsonStore.Load() // Load existing sessions, ignore errors
-		sessionStore = jsonStore
-	} else {
-		sessionStore = sqliteStore
-	}
+	sessionStore := session.NewSessionStore("")
+	sessionStore.Load() // Load existing sessions, ignore errors
 	
 	return &Daemon{
 		gitlabClient:    gitlabClient,
@@ -99,18 +55,8 @@ func NewWithDryRun(gitlabClient *gitlab.Client, config *config.Config, dryRun bo
 }
 
 func NewWithSemiDryRun(gitlabClient *gitlab.Client, config *config.Config) *Daemon {
-	var sessionStore session.Store
-	
-	sqliteStore, err := session.NewSQLiteSessionStore("")
-	if err != nil {
-		fmt.Printf("Warning: Failed to create SQLite session store, falling back to JSON store: %v\n", err)
-		// Fallback to JSON store
-		jsonStore := session.NewSessionStore("")
-		jsonStore.Load() // Load existing sessions, ignore errors
-		sessionStore = jsonStore
-	} else {
-		sessionStore = sqliteStore
-	}
+	sessionStore := session.NewSessionStore("")
+	sessionStore.Load() // Load existing sessions, ignore errors
 	
 	return &Daemon{
 		gitlabClient:    gitlabClient,
@@ -121,12 +67,6 @@ func NewWithSemiDryRun(gitlabClient *gitlab.Client, config *config.Config) *Daem
 		dryRun:          false, // For semi-dry-run, we clone repos but don't execute
 		semiDryRun:      true,
 	}
-}
-
-// isValidUUID checks if a string is a valid UUID format
-func isValidUUID(sessionID string) bool {
-	uuidPattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	return uuidPattern.MatchString(sessionID)
 }
 
 func (d *Daemon) selectProject(projects []gitlab.Project) (*gitlab.Project, error) {
@@ -289,36 +229,15 @@ func (d *Daemon) processIssueAsync(issueNumber int) error {
 			}
 			
 			// Store session information for comment monitoring
-			sessionID := process.ClaudeSessionID
-			if sessionID == "" {
-				fmt.Printf("[%s] Warning: Claude session ID not captured for issue #%d, using fallback ID %s\n", timestamp, process.IssueNum, process.ID)
-				sessionID = process.ID // Fallback to internal ID
-			}
-			
-			// Prepare environment context for storage
-			envVars := make(map[string]string)
-			if process.Cmd != nil && process.Cmd.Env != nil {
-				for _, env := range process.Cmd.Env {
-					if strings.Contains(env, "=") {
-						parts := strings.SplitN(env, "=", 2)
-						envVars[parts[0]] = parts[1]
-					}
-				}
-			}
-			
 			if err := d.sessionStore.AddCompletedSession(
 				process.IssueNum,
-				sessionID,
+				process.ID,
 				d.selectedProject,
 				time.Now(),
-				process.WorkingDir,
-				d.config.Claude.Command,
-				d.config.Claude.Flags,
-				envVars,
 			); err != nil {
 				fmt.Printf("[%s] Warning: failed to store session info for issue #%d: %v\n", timestamp, process.IssueNum, err)
 			} else {
-				fmt.Printf("[%s] Stored session %s for issue #%d (monitoring for new comments)\n", timestamp, sessionID, process.IssueNum)
+				fmt.Printf("[%s] Stored session %s for issue #%d (monitoring for new comments)\n", timestamp, process.ID, process.IssueNum)
 			}
 		} else {
 			fmt.Printf("[%s] Failed to complete issue #%d\n", timestamp, process.IssueNum)
@@ -438,17 +357,6 @@ func (d *Daemon) processIssueAsync(issueNumber int) error {
 
 
 func (d *Daemon) resumeSessionWithComments(session *session.CompletedSession, newComments []gitlab.Note) error {
-	return d.resumeSessionWithCommentsWithContext(context.Background(), session, newComments)
-}
-
-func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, session *session.CompletedSession, newComments []gitlab.Note) error {
-	// Check if context is already cancelled
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	
 	// Build comment context
@@ -456,13 +364,6 @@ func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, sessi
 	commentContext += "The following comments were added after you completed this issue:\n\n"
 	
 	for i, comment := range newComments {
-		// Check for cancellation during comment processing
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		
 		commentContext += fmt.Sprintf("## Comment %d by @%s\n", i+1, comment.Author.Username)
 		commentContext += fmt.Sprintf("**Posted:** %s\n\n", comment.CreatedAt)
 		commentContext += fmt.Sprintf("%s\n\n", comment.Body)
@@ -472,13 +373,6 @@ func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, sessi
 	commentContext += "Please review these comments and take any necessary follow-up actions. "
 	commentContext += "You can update your previous work, answer questions, or make additional changes as needed."
 	
-	// Validate session ID format
-	if !isValidUUID(session.SessionID) {
-		fmt.Printf("[%s] Skipping resume for issue #%d: session ID '%s' is not a valid UUID (likely from old format)\n", 
-			timestamp, session.IssueIID, session.SessionID)
-		return nil
-	}
-	
 	if d.dryRun {
 		fmt.Printf("[%s] [DRY RUN] Would resume session %s with comment context:\n%s\n", timestamp, session.SessionID, commentContext)
 		return nil
@@ -487,63 +381,25 @@ func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, sessi
 		return nil
 	}
 	
-	// Check again before starting the process
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	
-	// Use stored environment context to recreate the exact same execution environment
-	args := []string{}
-	claudeCommand := session.ClaudeCommand
-	claudeFlags := session.ClaudeFlags
-	workingDir := session.WorkingDir
-	
-	// Fallback to config values if not stored in session (for backward compatibility)
-	if claudeCommand == "" {
-		claudeCommand = d.config.Claude.Command
-	}
-	if claudeFlags == "" {
-		claudeFlags = d.config.Claude.Flags
-	}
-	if workingDir == "" {
-		// Fallback to detection logic for old sessions
-		detectedDir, _, err := claude.DetectProjectDirectory(session.ProjectPath)
-		if err != nil {
-			return fmt.Errorf("failed to detect working directory: %v", err)
-		}
-		workingDir = detectedDir
-	}
-	
-	// Build command arguments using the stored flags
-	if claudeFlags != "" {
-		args = strings.Fields(claudeFlags)
-	}
-	args = append(args, "-r", session.SessionID, "-p", commentContext)
+	// Create resume command - use claude -r <session-id> with the comment context
+	claudeCmd := fmt.Sprintf("%s %s -r %s -p %q", 
+		d.config.Claude.Command, 
+		d.config.Claude.Flags, 
+		session.SessionID, 
+		commentContext)
 	
 	fmt.Printf("[%s] Resuming Claude session %s for issue #%d with new comments\n", timestamp, session.SessionID, session.IssueIID)
-	fmt.Printf("[%s] Using stored environment: command=%s, working_dir=%s\n", timestamp, claudeCommand, workingDir)
 	
-	// Create a context-aware command execution using the stored command and environment
-	cmd := exec.CommandContext(ctx, claudeCommand, args...)
-	cmd.Dir = workingDir
-	
-	// Use stored environment variables if available, otherwise fall back to current environment
-	if session.EnvVars != nil && len(session.EnvVars) > 0 {
-		// Convert stored environment map back to slice format
-		envSlice := make([]string, 0, len(session.EnvVars))
-		for key, value := range session.EnvVars {
-			envSlice = append(envSlice, fmt.Sprintf("%s=%s", key, value))
-		}
-		cmd.Env = envSlice
-		fmt.Printf("[%s] Using %d stored environment variables\n", timestamp, len(session.EnvVars))
-	} else {
-		// Fallback for backward compatibility
-		cmd.Env = os.Environ()
-		fmt.Printf("[%s] Using current environment (no stored env vars)\n", timestamp)
+	// Use the existing working directory detection logic
+	workingDir, _, err := claude.DetectProjectDirectory(session.ProjectPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect working directory: %v", err)
 	}
 	
+	// Create a simple command execution (not using the full Process struct for resume)
+	cmd := exec.Command("bash", "-c", claudeCmd)
+	cmd.Dir = workingDir
+	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	
@@ -558,7 +414,7 @@ func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, sessi
 	fmt.Printf("[%s] Started resume session for issue #%d (PID: %d)\n", timestamp, session.IssueIID, cmd.Process.Pid)
 	
 	// Don't wait for completion - let it run in background
-	// The process will complete on its own and respect context cancellation
+	// The process will complete on its own
 	go func() {
 		err := cmd.Wait()
 		
@@ -566,32 +422,8 @@ func (d *Daemon) resumeSessionWithCommentsWithContext(ctx context.Context, sessi
 		delete(d.resumeProcesses, session.IssueIID)
 		
 		if err != nil {
-			// Check if it was cancelled due to context
-			if ctx.Err() != nil {
-				fmt.Printf("[%s] Resume session for issue #%d cancelled\n", 
-					time.Now().Format("2006-01-02 15:04:05"), session.IssueIID)
-			} else {
-				errorMsg := err.Error()
-				fmt.Printf("[%s] Resume session for issue #%d completed with error: %v\n", 
-					time.Now().Format("2006-01-02 15:04:05"), session.IssueIID, err)
-				
-				// Check if the error indicates the session is no longer valid
-				if strings.Contains(errorMsg, "No conversation found") || 
-				   strings.Contains(errorMsg, "session ID") ||
-				   strings.Contains(errorMsg, "not found") {
-					fmt.Printf("[%s] Session %s appears to be invalid/expired, removing from database\n", 
-						time.Now().Format("2006-01-02 15:04:05"), session.SessionID)
-					
-					// Remove the invalid session from the store
-					if removeErr := d.sessionStore.RemoveSession(session.IssueIID); removeErr != nil {
-						fmt.Printf("[%s] Warning: Failed to remove invalid session for issue #%d: %v\n", 
-							time.Now().Format("2006-01-02 15:04:05"), session.IssueIID, removeErr)
-					} else {
-						fmt.Printf("[%s] Removed invalid session for issue #%d from database\n", 
-							time.Now().Format("2006-01-02 15:04:05"), session.IssueIID)
-					}
-				}
-			}
+			fmt.Printf("[%s] Resume session for issue #%d completed with error: %v\n", 
+				time.Now().Format("2006-01-02 15:04:05"), session.IssueIID, err)
 		} else {
 			fmt.Printf("[%s] Resume session for issue #%d completed successfully\n", 
 				time.Now().Format("2006-01-02 15:04:05"), session.IssueIID)
@@ -804,25 +636,20 @@ func (d *Daemon) checkForReviewIssuesWithCommentsWithContext(ctx context.Context
 	fmt.Printf("[%s] DEBUG: Successfully fetched %d issues with review label\n", timestamp, len(reviewIssues))
 
 	resumedSessions := 0
-	for i, issue := range reviewIssues {
-		fmt.Printf("[%s] DEBUG: Processing review issue %d/%d (#%d)\n", timestamp, i+1, len(reviewIssues), issue.IID)
-		
+	for _, issue := range reviewIssues {
 		// Check for cancellation between issues
 		select {
 		case <-ctx.Done():
-			fmt.Printf("[%s] DEBUG: Context cancelled while processing issue %d\n", timestamp, issue.IID)
 			return resumedSessions, ctx.Err()
 		default:
 		}
 		
 		// Check if we have a completed session for this issue
-		fmt.Printf("[%s] DEBUG: Looking up session for issue #%d\n", timestamp, issue.IID)
 		session, exists := d.sessionStore.GetCompletedSession(issue.IID)
 		if !exists {
-			fmt.Printf("[%s] DEBUG: No session record for issue #%d, skipping\n", timestamp, issue.IID)
+			// No session record, skip this issue
 			continue
 		}
-		fmt.Printf("[%s] DEBUG: Found session for issue #%d\n", timestamp, issue.IID)
 
 		// Determine the cutoff time for new comments
 		cutoffTime := session.CompletionTime
@@ -830,73 +657,21 @@ func (d *Daemon) checkForReviewIssuesWithCommentsWithContext(ctx context.Context
 			cutoffTime = *session.LastCommentTime
 		}
 
-		// Check for new comments since the cutoff time (with context timeout)
-		fmt.Printf("[%s] DEBUG: Checking comments for issue #%d since %v\n", timestamp, session.IssueIID, cutoffTime)
-		
-		// Make comment checking cancellable with shorter timeout
-		commentCtx, commentCancel := context.WithTimeout(ctx, 8*time.Second)
-		defer commentCancel()
-		
-		type commentResult struct {
-			comments []gitlab.Note
-			err      error
-		}
-		
-		commentCh := make(chan commentResult, 1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("[%s] DEBUG: Panic in comment checking for issue #%d: %v\n", timestamp, session.IssueIID, r)
-					commentCh <- commentResult{comments: nil, err: fmt.Errorf("panic in comment checking: %v", r)}
-				}
-			}()
-			fmt.Printf("[%s] DEBUG: Starting API call for comments on issue #%d\n", timestamp, session.IssueIID)
-			comments, err := d.gitlabClient.GetIssueCommentsAfterWithContext(commentCtx, session.ProjectPath, session.IssueIID, cutoffTime)
-			fmt.Printf("[%s] DEBUG: Finished API call for comments on issue #%d, found %d comments, err: %v\n", timestamp, session.IssueIID, len(comments), err)
-			commentCh <- commentResult{comments: comments, err: err}
-		}()
-		
-		var newComments []gitlab.Note
-		select {
-		case <-commentCtx.Done():
-			fmt.Printf("[%s] DEBUG: Comment checking timed out or was cancelled for issue #%d (context error: %v)\n", timestamp, session.IssueIID, commentCtx.Err())
-			commentCancel()
-			continue
-		case res := <-commentCh:
-			newComments = res.comments
-			err = res.err
-		}
-		commentCancel()
-		
+		// Check for new comments since the cutoff time
+		newComments, err := d.gitlabClient.GetIssueCommentsAfter(session.ProjectPath, session.IssueIID, cutoffTime)
 		if err != nil {
 			fmt.Printf("[%s] Error checking comments for issue #%d: %v\n", timestamp, session.IssueIID, err)
 			continue
 		}
-		
-		fmt.Printf("[%s] DEBUG: Found %d new comments for issue #%d\n", timestamp, len(newComments), session.IssueIID)
 
 		if len(newComments) > 0 {
 			fmt.Printf("[%s] Found %d new comments on issue #%d\n", timestamp, len(newComments), session.IssueIID)
 			
-			// Check for cancellation before resuming session
-			select {
-			case <-ctx.Done():
-				fmt.Printf("[%s] DEBUG: Cancelled before resuming session for issue #%d\n", timestamp, session.IssueIID)
-				return resumedSessions, ctx.Err()
-			default:
-			}
-			
-			// Resume Claude session with new comments (this is now async and won't block)
-			fmt.Printf("[%s] DEBUG: Starting session resume for issue #%d\n", timestamp, session.IssueIID)
-			if err := d.resumeSessionWithCommentsWithContext(ctx, session, newComments); err != nil {
-				if ctx.Err() != nil {
-					fmt.Printf("[%s] Session resume cancelled for issue #%d\n", timestamp, session.IssueIID)
-					return resumedSessions, ctx.Err()
-				}
+			// Resume Claude session with new comments
+			if err := d.resumeSessionWithComments(session, newComments); err != nil {
 				fmt.Printf("[%s] Error resuming session for issue #%d: %v\n", timestamp, session.IssueIID, err)
 				continue
 			}
-			fmt.Printf("[%s] DEBUG: Finished session resume for issue #%d\n", timestamp, session.IssueIID)
 			
 			resumedSessions++
 			fmt.Printf("[%s] Resumed Claude session for issue #%d\n", timestamp, session.IssueIID)

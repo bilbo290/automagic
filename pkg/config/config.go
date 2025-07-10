@@ -30,6 +30,7 @@ type Config struct {
 		Interval     int    `yaml:"interval" env:"DAEMON_INTERVAL"`
 		ClaudeLabel  string `yaml:"claude_label" env:"CLAUDE_LABEL"`
 		ProcessLabel string `yaml:"process_label" env:"PROCESS_LABEL"`
+		ReviewLabel  string `yaml:"review_label" env:"REVIEW_LABEL"`
 	} `yaml:"daemon"`
 }
 
@@ -146,6 +147,9 @@ func Load() (*Config, error) {
 	}
 	if config.Daemon.ProcessLabel == "" {
 		config.Daemon.ProcessLabel = "picked_up_by_claude"
+	}
+	if config.Daemon.ReviewLabel == "" {
+		config.Daemon.ReviewLabel = "waiting_human_review"
 	}
 
 	return &config, nil

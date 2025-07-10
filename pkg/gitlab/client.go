@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,6 +45,24 @@ type Project struct {
 	LastActivityAt    string `json:"last_activity_at"`
 }
 
+type Discussion struct {
+	ID    string `json:"id"`
+	Notes []Note `json:"notes"`
+}
+
+type Note struct {
+	ID        int    `json:"id"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	System    bool   `json:"system"`
+	Author    struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
+	} `json:"author"`
+}
+
 type Client struct {
 	BaseURL string
 	Token   string
@@ -54,14 +73,18 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		Token:   token,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		client:  &http.Client{Timeout: 10 * time.Second}, // Reduced from 30s to 10s
 	}
 }
 
 func (c *Client) makeRequest(endpoint string) ([]byte, error) {
+	return c.makeRequestWithContext(context.Background(), endpoint)
+}
+
+func (c *Client) makeRequestWithContext(ctx context.Context, endpoint string) ([]byte, error) {
 	url := fmt.Sprintf("%s/api/v4%s", c.BaseURL, endpoint)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
@@ -208,4 +231,95 @@ func (c *Client) UpdateIssueLabels(projectPath string, issueIID int, labels []st
 	}
 
 	return nil
+}
+
+func (c *Client) GetIssueDiscussions(projectPath string, issueIID int) ([]Discussion, error) {
+	return c.GetIssueDiscussionsWithContext(context.Background(), projectPath, issueIID)
+}
+
+func (c *Client) GetIssueDiscussionsWithContext(ctx context.Context, projectPath string, issueIID int) ([]Discussion, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+	endpoint := fmt.Sprintf("/projects/%s/issues/%d/discussions", encodedPath, issueIID)
+
+	body, err := c.makeRequestWithContext(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var discussions []Discussion
+	if err := json.Unmarshal(body, &discussions); err != nil {
+		return nil, fmt.Errorf("failed to parse discussions: %v", err)
+	}
+
+	return discussions, nil
+}
+
+func (c *Client) GetIssueCommentsAfter(projectPath string, issueIID int, afterTime time.Time) ([]Note, error) {
+	return c.GetIssueCommentsAfterWithContext(context.Background(), projectPath, issueIID, afterTime)
+}
+
+func (c *Client) GetIssueCommentsAfterWithContext(ctx context.Context, projectPath string, issueIID int, afterTime time.Time) ([]Note, error) {
+	discussions, err := c.GetIssueDiscussionsWithContext(ctx, projectPath, issueIID)
+	if err != nil {
+		return nil, err
+	}
+
+	var newComments []Note
+	for _, discussion := range discussions {
+		for _, note := range discussion.Notes {
+			// Check for cancellation during processing
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			
+			// Skip system notes (like label changes)
+			if note.System {
+				continue
+			}
+
+			// Parse created time
+			createdAt, err := time.Parse(time.RFC3339, note.CreatedAt)
+			if err != nil {
+				continue // Skip if we can't parse the time
+			}
+
+			// Only include comments after the specified time
+			if createdAt.After(afterTime) {
+				newComments = append(newComments, note)
+			}
+		}
+	}
+
+	return newComments, nil
+}
+
+func (c *Client) GetLatestCommentTime(projectPath string, issueIID int) (*time.Time, error) {
+	discussions, err := c.GetIssueDiscussions(projectPath, issueIID)
+	if err != nil {
+		return nil, err
+	}
+
+	var latestTime *time.Time
+	for _, discussion := range discussions {
+		for _, note := range discussion.Notes {
+			// Skip system notes
+			if note.System {
+				continue
+			}
+
+			// Parse created time
+			createdAt, err := time.Parse(time.RFC3339, note.CreatedAt)
+			if err != nil {
+				continue
+			}
+
+			if latestTime == nil || createdAt.After(*latestTime) {
+				latestTime = &createdAt
+			}
+		}
+	}
+
+	return latestTime, nil
 }
