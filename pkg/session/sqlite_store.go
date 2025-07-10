@@ -23,7 +23,7 @@ var _ Store = (*SQLiteSessionStore)(nil)
 // NewSQLiteSessionStore creates a new SQLite-based session store
 func NewSQLiteSessionStore(dataDir string) (*SQLiteSessionStore, error) {
 	if dataDir == "" {
-		dataDir = filepath.Join(os.Getenv("HOME"), ".peter")
+		dataDir = filepath.Join(os.Getenv("HOME"), ".automagic")
 	}
 
 	// Ensure directory exists
@@ -58,11 +58,11 @@ func (s *SQLiteSessionStore) createTables() error {
 		last_comment_time INTEGER
 	);
 	`
-	
+
 	if _, err := s.db.Exec(createTableQuery); err != nil {
 		return err
 	}
-	
+
 	// Now add the new columns if they don't exist (migration)
 	migrationQueries := []string{
 		`ALTER TABLE completed_sessions ADD COLUMN working_dir TEXT`,
@@ -70,12 +70,12 @@ func (s *SQLiteSessionStore) createTables() error {
 		`ALTER TABLE completed_sessions ADD COLUMN claude_flags TEXT`,
 		`ALTER TABLE completed_sessions ADD COLUMN env_vars TEXT`,
 	}
-	
+
 	for _, query := range migrationQueries {
 		// These will fail if columns already exist, which is expected
 		s.db.Exec(query)
 	}
-	
+
 	// Create index
 	indexQuery := `CREATE INDEX IF NOT EXISTS idx_completion_time ON completed_sessions(completion_time);`
 	_, err := s.db.Exec(indexQuery)
@@ -412,10 +412,10 @@ func (s *SQLiteSessionStore) MigrateFromJSONStore(jsonStore *SessionStore) error
 			session.SessionID,
 			session.ProjectPath,
 			session.CompletionTime,
-			session.WorkingDir,     // Will be empty string for old sessions
-			session.ClaudeCommand,  // Will be empty string for old sessions
-			session.ClaudeFlags,    // Will be empty string for old sessions
-			session.EnvVars,        // Will be nil for old sessions
+			session.WorkingDir,    // Will be empty string for old sessions
+			session.ClaudeCommand, // Will be empty string for old sessions
+			session.ClaudeFlags,   // Will be empty string for old sessions
+			session.EnvVars,       // Will be nil for old sessions
 		)
 		if err != nil {
 			return fmt.Errorf("failed to migrate session %d: %v", session.IssueIID, err)

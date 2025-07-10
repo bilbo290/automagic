@@ -273,7 +273,7 @@ func (c *Client) GetIssueCommentsAfterWithContext(ctx context.Context, projectPa
 				return nil, ctx.Err()
 			default:
 			}
-			
+
 			// Skip system notes (like label changes)
 			if note.System {
 				continue
@@ -322,4 +322,48 @@ func (c *Client) GetLatestCommentTime(projectPath string, issueIID int) (*time.T
 	}
 
 	return latestTime, nil
+}
+
+func (c *Client) CreateIssueNote(projectPath string, issueIID int, body string) (*Note, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+	url := fmt.Sprintf("%s/api/v4/projects/%s/issues/%d/notes", c.BaseURL, encodedPath, issueIID)
+
+	payload := map[string]string{
+		"body": body,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonPayload)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("failed to create note: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var note Note
+	if err := json.Unmarshal(respBody, &note); err != nil {
+		return nil, fmt.Errorf("failed to parse note response: %v", err)
+	}
+
+	return &note, nil
 }

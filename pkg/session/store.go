@@ -11,16 +11,16 @@ import (
 
 // CompletedSession tracks information about a completed Claude session
 type CompletedSession struct {
-	IssueIID        int                `json:"issue_iid"`
-	SessionID       string             `json:"session_id"`
-	ProjectPath     string             `json:"project_path"`
-	CompletionTime  time.Time          `json:"completion_time"`
-	LastCommentTime *time.Time         `json:"last_comment_time,omitempty"`
+	IssueIID        int        `json:"issue_iid"`
+	SessionID       string     `json:"session_id"`
+	ProjectPath     string     `json:"project_path"`
+	CompletionTime  time.Time  `json:"completion_time"`
+	LastCommentTime *time.Time `json:"last_comment_time,omitempty"`
 	// Environment context for session resumption
-	WorkingDir      string             `json:"working_dir"`
-	ClaudeCommand   string             `json:"claude_command"`
-	ClaudeFlags     string             `json:"claude_flags"`
-	EnvVars         map[string]string  `json:"env_vars"`
+	WorkingDir    string            `json:"working_dir"`
+	ClaudeCommand string            `json:"claude_command"`
+	ClaudeFlags   string            `json:"claude_flags"`
+	EnvVars       map[string]string `json:"env_vars"`
 }
 
 // SessionStore manages storage of completed sessions (JSON-based, legacy)
@@ -36,12 +36,12 @@ var _ Store = (*SessionStore)(nil)
 // NewSessionStore creates a new session store
 func NewSessionStore(dataDir string) *SessionStore {
 	if dataDir == "" {
-		dataDir = filepath.Join(os.Getenv("HOME"), ".peter")
+		dataDir = filepath.Join(os.Getenv("HOME"), ".automagic")
 	}
-	
+
 	// Ensure directory exists
 	os.MkdirAll(dataDir, 0755)
-	
+
 	return &SessionStore{
 		sessions: make(map[int]*CompletedSession),
 		filePath: filepath.Join(dataDir, "sessions.json"),
@@ -164,7 +164,7 @@ func (s *SessionStore) GetCompletedSessions() []*CompletedSession {
 // GetRecentlyCompletedSessions returns sessions completed within the specified duration
 func (s *SessionStore) GetRecentlyCompletedSessions(since time.Duration) []*CompletedSession {
 	cutoff := time.Now().Add(-since)
-	
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

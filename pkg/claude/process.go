@@ -95,28 +95,28 @@ func (pm *ProcessManager) GetProcessesByStatus(status string) []*Process {
 func extractSessionIDFromText(text string) string {
 	// UUID pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
-	
+
 	// Look for common session ID patterns in Claude output
 	sessionPatterns := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)session\s+id[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`),
 		regexp.MustCompile(`(?i)session[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`),
 		regexp.MustCompile(`(?i)id[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`),
 	}
-	
+
 	// First try specific session ID patterns
 	for _, pattern := range sessionPatterns {
 		if matches := pattern.FindStringSubmatch(text); len(matches) > 1 {
 			return matches[1]
 		}
 	}
-	
+
 	// Fallback: look for any UUID in the text (but be conservative)
 	if strings.Contains(strings.ToLower(text), "session") {
 		if match := uuidPattern.FindString(text); match != "" {
 			return match
 		}
 	}
-	
+
 	return ""
 }
 
@@ -129,13 +129,13 @@ func ensureRepositoryExists(projectPath string, gitlabURL string, dryRun bool) (
 		return "", false, fmt.Errorf("invalid project path: %s", projectPath)
 	}
 	projectName := pathParts[len(pathParts)-1]
-	
+
 	// Check current directory first
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", false, fmt.Errorf("failed to get current working directory: %v", err)
 	}
-	
+
 	// Check if we're already in the project directory
 	if filepath.Base(cwd) == projectName {
 		// Verify it's a git repository
@@ -145,7 +145,7 @@ func ensureRepositoryExists(projectPath string, gitlabURL string, dryRun bool) (
 			return cwd, false, nil // Not cloned, already existed
 		}
 	}
-	
+
 	// Check if project exists as a subdirectory
 	projectDir := filepath.Join(cwd, projectName)
 	gitDir := filepath.Join(projectDir, ".git")
@@ -153,7 +153,7 @@ func ensureRepositoryExists(projectPath string, gitlabURL string, dryRun bool) (
 		fmt.Printf("Found existing repository at: %s\n", projectDir)
 		return projectDir, false, nil // Not cloned, already existed
 	}
-	
+
 	// Repository doesn't exist, need to clone
 	if dryRun {
 		fmt.Printf("[DRY RUN] Repository not found locally. Would clone %s\n", projectPath)
@@ -163,20 +163,20 @@ func ensureRepositoryExists(projectPath string, gitlabURL string, dryRun bool) (
 		return projectDir, true, nil // Would be cloned in real mode
 	} else {
 		fmt.Printf("Repository not found locally. Cloning %s...\n", projectPath)
-		
+
 		// Construct clone URL
 		cloneURL := fmt.Sprintf("%s/%s.git", strings.TrimSuffix(gitlabURL, "/"), projectPath)
-		
+
 		// Clone the repository
 		cmd := exec.Command("git", "clone", cloneURL, projectName)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Dir = cwd
-		
+
 		if err := cmd.Run(); err != nil {
 			return "", false, fmt.Errorf("failed to clone repository: %v", err)
 		}
-		
+
 		fmt.Printf("Successfully cloned repository to: %s\n", projectDir)
 		return projectDir, true, nil // Was actually cloned
 	}
@@ -217,7 +217,7 @@ func DetectProjectDirectory(projectPath string) (string, string, error) {
 			// Reached root directory
 			break
 		}
-		
+
 		goModPath := filepath.Join(parentDir, "go.mod")
 		if _, err := os.Stat(goModPath); err == nil {
 			// Found go.mod in parent directory
@@ -280,7 +280,7 @@ func CreateProcessWithCallbackAndGitlabDryRun(issueNumber int, processID string,
 	// Now detect project information from the repository directory
 	workingDir := repoDir
 	moduleName := ""
-	
+
 	// Check for go.mod in the repository
 	goModPath := filepath.Join(repoDir, "go.mod")
 	if content, err := os.ReadFile(goModPath); err == nil {
@@ -301,7 +301,7 @@ func CreateProcessWithCallbackAndGitlabDryRun(issueNumber int, processID string,
 	} else {
 		// Build project context information
 		projectInfo := fmt.Sprintf("- **GitLab Project Path**: `%s`\n- **Your Username**: @%s\n- **Current Working Directory**: `%s`", projectPath, username, workingDir)
-		
+
 		if moduleName != "" {
 			projectInfo += fmt.Sprintf("\n- **Go Module**: `%s`", moduleName)
 		}
@@ -360,16 +360,16 @@ T1: 15+ minutes
 
 ### 7. **Final Update & Human Review**
    - Comment on the issue with the MR link and completion status
-   - The issue will be automatically marked as "waiting_human_review"
+   - The issue will be automagically marked as "waiting_human_review"
    - Humans can now review your work and provide feedback
-   - If they add comments with feedback, I will automatically resume this session to iterate
+   - If they add comments with feedback, I will automagically resume this session to iterate
 
 **IMPORTANT**: You MUST post your implementation plan to the GitLab issue before making any code changes. This ensures transparency and allows for feedback before implementation begins.
 
 **Human Review Process**: After completion, the issue enters a review phase where:
 - The issue label changes from "picked_up_by_claude" to "waiting_human_review"
 - Humans can review the code, test the changes, and provide feedback
-- Any new comments will automatically trigger a session resume with the feedback context
+- Any new comments will automagically trigger a session resume with the feedback context
 - Only when humans are satisfied should they manually change the label to "solved"
 `, issueNumber, projectInfo)
 	}
@@ -393,7 +393,7 @@ T1: 15+ minutes
 		args = strings.Fields(claudeFlags)
 	}
 	args = append(args, "-p", prompt)
-	
+
 	// Run claude directly without shell
 	cmd := exec.Command(claudeCommand, args...)
 	cmd.Stderr = os.Stderr
@@ -424,14 +424,14 @@ T1: 15+ minutes
 func cleanupRepositoryState(process *Process) {
 	fmt.Printf("Repository cleanup disabled - leaving repository state unchanged at: %s\n", process.WorkingDir)
 	fmt.Printf("Note: This allows reuse of existing worktree issues and preserves work in progress\n")
-	
+
 	// All cleanup operations are now disabled:
 	// - No git reset --hard HEAD
 	// - No git clean -fd
 	// - No branch switching
 	// - No branch deletion
 	// - No git pull
-	
+
 	// This allows Claude to continue working on existing branches and preserves any work in progress
 }
 
@@ -454,7 +454,7 @@ func detectMainBranch() string {
 			return parts[len(parts)-1]
 		}
 	}
-	
+
 	// Fallback: try common branch names
 	commonBranches := []string{"main", "master", "develop"}
 	for _, branch := range commonBranches {
@@ -463,7 +463,7 @@ func detectMainBranch() string {
 			return branch
 		}
 	}
-	
+
 	// If nothing found, return empty (will skip checkout)
 	return ""
 }
@@ -476,7 +476,7 @@ func cleanupIssueBranches() error {
 	if err != nil {
 		return err
 	}
-	
+
 	branches := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, branch := range branches {
 		branch = strings.TrimSpace(branch)
@@ -489,7 +489,7 @@ func cleanupIssueBranches() error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 

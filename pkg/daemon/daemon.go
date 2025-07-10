@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bilbo290/automatic/pkg/claude"
-	"github.com/bilbo290/automatic/pkg/config"
-	"github.com/bilbo290/automatic/pkg/gitlab"
-	"github.com/bilbo290/automatic/pkg/session"
+	"github.com/bilbo290/automagic/pkg/claude"
+	"github.com/bilbo290/automagic/pkg/config"
+	"github.com/bilbo290/automagic/pkg/gitlab"
+	"github.com/bilbo290/automagic/pkg/session"
 )
 
 type Daemon struct {
@@ -298,7 +298,24 @@ func (d *Daemon) processIssueAsync(issueNumber int) error {
 			if success {
 				fmt.Printf("[%s] Successfully completed issue #%d\n", timestamp, process.IssueNum)
 
-				// Update labels to mark as waiting for human review
+				// First: Post a completion comment to the issue
+				completionComment := "✅ **Task completed successfully**\n\nClaude has finished processing this issue. The implementation has been completed and is ready for human review."
+				note, err := d.gitlabClient.CreateIssueNote(d.selectedProject, process.IssueNum, completionComment)
+				if err != nil {
+					fmt.Printf("[%s] Warning: failed to post completion comment for issue #%d: %v\n", timestamp, process.IssueNum, err)
+					// Still continue with label updates even if comment fails
+				} else {
+					fmt.Printf("[%s] Posted completion comment for issue #%d\n", timestamp, process.IssueNum)
+					// Update the last comment time to the actual comment timestamp
+					// This prevents the daemon from immediately triggering again
+					d.lastCommentTime[process.IssueNum] = note.CreatedAt
+					fmt.Printf("[%s] Updated last comment time for issue #%d to comment timestamp: %s\n", timestamp, process.IssueNum, note.CreatedAt)
+				}
+
+				// Add a small delay to ensure the comment is processed
+				time.Sleep(2 * time.Second)
+
+				// Second: Update labels to mark as waiting for human review
 				newLabels := make([]string, 0)
 
 				// Get current issue to get current labels
@@ -653,7 +670,7 @@ func (d *Daemon) checkForNewClaudeIssues(processedIssues map[int]bool, timestamp
 
 			fmt.Printf("[%s] Found new issue #%d: %s\n", timestamp, issue.IID, issue.Title)
 
-			// Process issue asynchronously with automatic label updates
+			// Process issue asynchronously with automagic label updates
 			if err := d.processIssueWithLabelUpdate(&issue); err != nil {
 				fmt.Printf("[%s] Failed to start processing issue #%d: %v\n", timestamp, issue.IID, err)
 			} else {
@@ -725,7 +742,7 @@ func (d *Daemon) checkForNewClaudeIssuesWithContext(ctx context.Context, process
 
 			fmt.Printf("[%s] Found new issue #%d: %s\n", timestamp, issue.IID, issue.Title)
 
-			// Process issue asynchronously with automatic label updates
+			// Process issue asynchronously with automagic label updates
 			if err := d.processIssueWithLabelUpdate(&issue); err != nil {
 				fmt.Printf("[%s] Failed to start processing issue #%d: %v\n", timestamp, issue.IID, err)
 			} else {
@@ -920,7 +937,7 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 				fmt.Printf("[%s] Found issue #%d with NEW human comment from @%s: %s\n",
 					timestamp, issue.IID, lastComment.Author.Username, issue.Title)
 
-				// Process issue asynchronously with automatic label updates
+				// Process issue asynchronously with automagic label updates
 				if err := d.processIssueWithLabelUpdate(&issue); err != nil {
 					fmt.Printf("[%s] Failed to start processing issue #%d: %v\n", timestamp, issue.IID, err)
 				} else {

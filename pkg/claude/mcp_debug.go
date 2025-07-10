@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bilbo290/automatic/pkg/config"
-	"github.com/bilbo290/automatic/pkg/gitlab"
+	"github.com/bilbo290/automagic/pkg/config"
+	"github.com/bilbo290/automagic/pkg/gitlab"
 )
 
 type MCPDebugInfo struct {

@@ -1,4 +1,4 @@
-module github.com/bilbo290/automatic
+module github.com/bilbo290/automagic
 
 go 1.24
 
