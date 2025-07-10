@@ -14,6 +14,13 @@ import (
 	"github.com/bilbo290/automagic/pkg/gitlab"
 )
 
+// Build-time variables (set via ldflags)
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
 func generateConfigTemplate() error {
 	template := `# automagic GitLab Automation Configuration
 # Edit these values with your GitLab credentials and preferences
@@ -436,7 +443,18 @@ func testLabelFiltering(gitlabClient *gitlab.Client, cfg *config.Config) error {
 	return nil
 }
 
+func printVersionInfo() {
+	fmt.Printf("automagic GitLab Automation\n")
+	fmt.Printf("Version: %s\n", version)
+	fmt.Printf("Commit: %s\n", commit)
+	fmt.Printf("Build Time: %s\n", buildTime)
+	fmt.Printf("Build Date: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+}
+
 func main() {
+	// Print version info at startup
+	printVersionInfo()
+	
 	var issueNumber int
 	var listProjects bool
 	var searchQuery string

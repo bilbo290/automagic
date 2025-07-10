@@ -913,13 +913,39 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 			}
 		}
 
-		// Check if the last comment is from a human (not gitlab-claude-bot)
+		// Check if the last comment is from a human (not a bot)
 		if len(comments) > 0 {
 			lastComment := comments[len(comments)-1]
-			isHumanComment := lastComment.Author.Username != "gitlab-claude-bot"
-
-			fmt.Printf("[%s] DEBUG: Issue #%d last comment by @%s at %s (human: %v)\n",
-				timestamp, issue.IID, lastComment.Author.Username, lastComment.CreatedAt, isHumanComment)
+			
+			// Check multiple criteria to identify bot comments
+			isBotComment := false
+			
+			// Check if display name contains common bot indicators
+			authorName := strings.ToLower(lastComment.Author.Name)
+			if strings.Contains(authorName, "claude") || strings.Contains(authorName, "bot") {
+				isBotComment = true
+			}
+			
+			// Check if username contains "bot" (for auto-generated bot usernames)
+			authorUsername := strings.ToLower(lastComment.Author.Username)
+			if strings.Contains(authorUsername, "bot") {
+				isBotComment = true
+			}
+			
+			// Also check against configured username as fallback
+			botUsername := d.config.GitLab.Username
+			if lastComment.Author.Username == botUsername {
+				isBotComment = true
+			}
+			
+			isHumanComment := !isBotComment
+			
+			fmt.Printf("[%s] DEBUG: Issue #%d last comment by @%s (%s) at %s\n", 
+				timestamp, issue.IID, lastComment.Author.Username, lastComment.Author.Name, lastComment.CreatedAt)
+			fmt.Printf("[%s] DEBUG: Bot detection - Name: '%s', Username: '%s', Config: '%s'\n", 
+				timestamp, lastComment.Author.Name, lastComment.Author.Username, botUsername)
+			fmt.Printf("[%s] DEBUG: Is bot comment: %v, Is human comment: %v\n", 
+				timestamp, isBotComment, isHumanComment)
 
 			// Check if this comment is newer than the last one we processed
 			lastProcessedTime, hasProcessedBefore := d.lastCommentTime[issue.IID]
