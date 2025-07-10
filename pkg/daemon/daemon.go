@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -795,6 +796,9 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 		// Get the latest comments to check if last comment is from human
 		fmt.Printf("[%s] DEBUG: Checking latest comments for issue #%d\n", timestamp, issue.IID)
 		
+		// Add a small delay to handle potential API caching/replication delays
+		time.Sleep(1 * time.Second)
+		
 		// Create a timeout context for comment checking
 		commentCtx, commentCancel := context.WithTimeout(ctx, 8*time.Second)
 		defer commentCancel()
@@ -813,11 +817,27 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 				return
 			}
 			
-			// Flatten all notes from all discussions
+			// Flatten all notes from all discussions and filter out system notes
 			var allNotes []gitlab.Note
 			for _, discussion := range discussions {
-				allNotes = append(allNotes, discussion.Notes...)
+				for _, note := range discussion.Notes {
+					// Skip system-generated notes (like label changes, etc.)
+					if !note.System {
+						allNotes = append(allNotes, note)
+					}
+				}
 			}
+			
+			// Sort notes by creation time to ensure we get the actual latest comment
+			sort.Slice(allNotes, func(i, j int) bool {
+				timeI, errI := time.Parse(time.RFC3339, allNotes[i].CreatedAt)
+				timeJ, errJ := time.Parse(time.RFC3339, allNotes[j].CreatedAt)
+				if errI != nil || errJ != nil {
+					// Fallback to string comparison if parsing fails
+					return allNotes[i].CreatedAt < allNotes[j].CreatedAt
+				}
+				return timeI.Before(timeJ)
+			})
 			
 			commentCh <- commentResult{comments: allNotes, err: nil}
 		}()
@@ -839,13 +859,30 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 			continue
 		}
 		
+		fmt.Printf("[%s] DEBUG: Issue #%d has %d total comments (non-system)\n", timestamp, issue.IID, len(comments))
+		
+		// Show the last few comments for debugging
+		if len(comments) > 0 {
+			numToShow := 3
+			if len(comments) < numToShow {
+				numToShow = len(comments)
+			}
+			
+			fmt.Printf("[%s] DEBUG: Last %d comments for issue #%d:\n", timestamp, numToShow, issue.IID)
+			for i := len(comments) - numToShow; i < len(comments); i++ {
+				comment := comments[i]
+				fmt.Printf("[%s] DEBUG:   %d. @%s at %s: %.50s...\n", 
+					timestamp, i+1, comment.Author.Username, comment.CreatedAt, comment.Body)
+			}
+		}
+		
 		// Check if the last comment is from a human (not gitlab-claude-bot)
 		if len(comments) > 0 {
 			lastComment := comments[len(comments)-1]
 			isHumanComment := lastComment.Author.Username != "gitlab-claude-bot"
 			
-			fmt.Printf("[%s] DEBUG: Issue #%d last comment by @%s (human: %v)\n", 
-				timestamp, issue.IID, lastComment.Author.Username, isHumanComment)
+			fmt.Printf("[%s] DEBUG: Issue #%d last comment by @%s at %s (human: %v)\n", 
+				timestamp, issue.IID, lastComment.Author.Username, lastComment.CreatedAt, isHumanComment)
 			
 			if isHumanComment {
 				// Mark as processed and start new session
@@ -861,6 +898,8 @@ func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, proce
 				} else {
 					fmt.Printf("[%s] Started new Claude session for issue #%d (human review response)\n", timestamp, issue.IID)
 				}
+			} else {
+				fmt.Printf("[%s] DEBUG: Skipping issue #%d - last comment is from bot\n", timestamp, issue.IID)
 			}
 		} else {
 			fmt.Printf("[%s] DEBUG: Issue #%d has no comments, skipping\n", timestamp, issue.IID)
