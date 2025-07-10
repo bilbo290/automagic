@@ -9,10 +9,8 @@ automatic is a powerful daemon that automates GitLab issue processing using Clau
 Install automatic directly from GitHub using Go:
 
 ```bash
-go install github.com/your-username/automatic@latest
+go install github.com/bilbo290/automatic@latest
 ```
-
-> **Note**: Replace `your-username` with the actual GitHub username/organization where this repository is hosted.
 
 ### Prerequisites
 
