@@ -1,15 +1,15 @@
-# Peter - GitLab Issue Automation with Claude AI
+# automatic - GitLab Issue Automation with Claude AI
 
-Peter is a powerful daemon that automates GitLab issue processing using Claude AI. It monitors GitLab issues with specific labels and automatically creates implementation plans, code changes, and merge requests.
+automatic is a powerful daemon that automates GitLab issue processing using Claude AI. It monitors GitLab issues with specific labels and automatically creates implementation plans, code changes, and merge requests.
 
 ## 🚀 Quick Start
 
 ### Installation
 
-Install Peter directly from GitHub using Go:
+Install automatic directly from GitHub using Go:
 
 ```bash
-go install github.com/your-username/peter@latest
+go install github.com/your-username/automatic@latest
 ```
 
 > **Note**: Replace `your-username` with the actual GitHub username/organization where this repository is hosted.
@@ -33,7 +33,7 @@ Your GitLab Personal Access Token needs the following scopes:
 
 ### Environment Variables
 
-Peter uses environment variables for all configuration. You can set them directly in your shell or use a `.env` file.
+automatic uses environment variables for all configuration. You can set them directly in your shell or use a `.env` file.
 
 #### Option 1: Direct Environment Variables
 
@@ -50,13 +50,13 @@ export CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json 
 Generate a template configuration file:
 
 ```bash
-peter -generate-config
+automatic -generate-config
 ```
 
 Then edit the generated `.env` file:
 
 ```bash
-# Peter GitLab Automation Configuration
+# automatic GitLab Automation Configuration
 GITLAB_URL=https://gitlab.com
 GITLAB_TOKEN=glpat-your-token-here
 GITLAB_USERNAME=your-gitlab-username
@@ -81,7 +81,7 @@ REVIEW_LABEL=waiting_human_review
 First, set up your project interactively:
 
 ```bash
-peter -interactive
+automatic -interactive
 ```
 
 This will:
@@ -94,7 +94,7 @@ This will:
 
 #### With Memory (SQLite Session Storage)
 ```bash
-peter --daemon --memory
+automatic --daemon --memory
 ```
 
 **Features:**
@@ -105,7 +105,7 @@ peter --daemon --memory
 
 #### Without Memory (Fresh Sessions)
 ```bash
-peter --daemon
+automatic --daemon
 ```
 
 **Features:**
@@ -119,46 +119,46 @@ peter --daemon
 
 ```bash
 # Process a specific issue
-peter -issue 123
+automatic -issue 123
 
 # Dry run (see what would happen)
-peter -issue 123 -dry-run
+automatic -issue 123 -dry-run
 
 # Semi-dry run (clone repo, show prompt, but don't execute)
-peter -issue 123 -semi-dry-run
+automatic -issue 123 -semi-dry-run
 ```
 
 ### Utility Commands
 
 ```bash
 # List accessible projects
-peter -list-projects
+automatic -list-projects
 
 # Search for projects
-peter -search "backend"
+automatic -search "backend"
 
 # List issues in selected project
-peter -list-issues
+automatic -list-issues
 
 # List issues with specific label
-peter -list-issues -label "claude"
+automatic -list-issues -label "claude"
 
 # Test label filtering
-peter -test-labels
+automatic -test-labels
 
 # Debug GitLab MCP integration
-peter -debug-mcp
+automatic -debug-mcp
 ```
 
 ## 🏷️ Label Workflow
 
-Peter uses a three-label workflow system:
+automatic uses a three-label workflow system:
 
 ### 1. Starting Work: `claude` Label
 
 ```mermaid
 graph LR
-    A[Issue with 'claude' label] --> B[Peter picks up]
+    A[Issue with 'claude' label] --> B[automatic picks up]
     B --> C[Label: 'picked_up_by_claude']
     C --> D[Claude processes issue]
 ```
@@ -167,7 +167,7 @@ graph LR
 
 ### 2. Processing: `picked_up_by_claude` Label
 
-While Peter is processing:
+While automatic is processing:
 - Issue is labeled `picked_up_by_claude`
 - Claude analyzes the issue and existing comments
 - Creates implementation plan and posts as comment
@@ -190,7 +190,7 @@ After Claude completes:
 - Issue is labeled `waiting_human_review`
 - Humans review the merge request and implementation
 - Add comments with feedback, questions, or requests
-- Peter automatically detects human comments and re-engages Claude
+- automatic automatically detects human comments and re-engages Claude
 
 ### 4. Completion: `solved` Label
 
@@ -238,13 +238,13 @@ your-project/
 **1. "GitLab connection test failed"**
 ```bash
 # Check your token and URL
-peter -list-projects
+automatic -list-projects
 ```
 
 **2. "No project configured"**
 ```bash
 # Run interactive setup
-peter -interactive
+automatic -interactive
 ```
 
 **3. "Claude command not found"**
@@ -264,19 +264,19 @@ Use dry-run modes to debug issues:
 
 ```bash
 # See exactly what would happen
-peter --daemon -dry-run
+automatic --daemon -dry-run
 
 # Clone repo and show prompts without executing
-peter --daemon -semi-dry-run
+automatic --daemon -semi-dry-run
 ```
 
 ### Logs and Monitoring
 
-Peter provides detailed logging:
+automatic provides detailed logging:
 
 ```bash
 # Run daemon with full debug output
-peter --daemon 2>&1 | tee peter.log
+automatic --daemon 2>&1 | tee automatic.log
 ```
 
 ## 🔄 Workflow Examples
@@ -285,14 +285,14 @@ peter --daemon 2>&1 | tee peter.log
 
 1. **Human creates issue**: "Add dark mode toggle to settings page"
 2. **Human adds label**: `claude`
-3. **Peter picks up**: Changes label to `picked_up_by_claude`
+3. **automatic picks up**: Changes label to `picked_up_by_claude`
 4. **Claude analyzes**: Reads issue description and existing comments
 5. **Claude plans**: Posts implementation plan as comment
 6. **Claude implements**: Creates branch, writes code, commits changes
 7. **Claude delivers**: Creates merge request, updates issue
 8. **System updates**: Label changes to `waiting_human_review`
 9. **Human reviews**: Checks MR, tests locally, adds feedback comment
-10. **Peter re-engages**: Detects human comment, changes label back to `picked_up_by_claude`
+10. **automatic re-engages**: Detects human comment, changes label back to `picked_up_by_claude`
 11. **Claude iterates**: Addresses feedback, updates implementation
 12. **Loop continues**: Until human is satisfied and marks as `solved`
 
@@ -351,21 +351,21 @@ When reviewing Claude's work:
 ### Repository Management
 
 - Keep your repositories clean and up-to-date
-- Use meaningful branch names (Peter creates `issue-{number}` branches)
-- Review and merge Peter's MRs promptly to avoid conflicts
+- Use meaningful branch names (automatic creates `issue-{number}` branches)
+- Review and merge automatic's MRs promptly to avoid conflicts
 
 ## 🔒 Security Considerations
 
 - Store GitLab tokens securely (use environment variables in production)
 - Review all code changes before merging
 - Use appropriate GitLab project permissions
-- Consider running Peter in a isolated environment for production use
+- Consider running automatic in a isolated environment for production use
 
 ## 📚 Additional Resources
 
 - [Claude Code Documentation](https://docs.anthropic.com/en/docs/claude-code)
 - [GitLab API Documentation](https://docs.gitlab.com/ee/api/)
-- [Peter GitHub Repository](https://github.com/your-username/peter)
+- [automatic GitHub Repository](https://github.com/your-username/automatic)
 
 ## 🤝 Contributing
 

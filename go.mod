@@ -1,4 +1,4 @@
-module peter
+module github.com/bilbo290/automatic
 
 go 1.21
 

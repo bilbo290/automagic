@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"peter/pkg/claude"
-	"peter/pkg/config"
-	"peter/pkg/gitlab"
-	"peter/pkg/session"
+	"automatic/pkg/claude"
+	"automatic/pkg/config"
+	"automatic/pkg/gitlab"
+	"automatic/pkg/session"
 )
 
 type Daemon struct {

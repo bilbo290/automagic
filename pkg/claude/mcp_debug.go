@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"peter/pkg/config"
-	"peter/pkg/gitlab"
+	"github.com/bilbo290/automatic/pkg/config"
+	"github.com/bilbo290/automatic/pkg/gitlab"
 )
 
 type MCPDebugInfo struct {
@@ -162,7 +162,7 @@ func runClaudeCommand(prompt string, cfg *config.Config) (string, error) {
 	if homeDir == "" {
 		return "", fmt.Errorf("HOME environment variable not set")
 	}
-	
+
 	// Use the user's shell to preserve environment
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -176,9 +176,9 @@ func runClaudeCommand(prompt string, cfg *config.Config) (string, error) {
 	claudeCmd := fmt.Sprintf("%s %s -p %q", cfg.Claude.Command, cfg.Claude.Flags, prompt)
 	fmt.Printf("Debug: Running command: %s\n", claudeCmd)
 	fmt.Printf("Debug: Working directory: %s\n", homeDir)
-	
+
 	cmd := exec.Command(shell, "-c", claudeCmd)
-	
+
 	// Set environment and working directory BEFORE anything else
 	cmd.Env = os.Environ()
 	cmd.Dir = homeDir
@@ -231,7 +231,7 @@ func runClaudeCommand(prompt string, cfg *config.Config) (string, error) {
 	finalResult := result.String()
 	fmt.Printf("Debug: Final result length: %d\n", len(finalResult))
 	fmt.Printf("Debug: Final result: %s\n", finalResult)
-	
+
 	return finalResult, nil
 }
 

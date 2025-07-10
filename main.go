@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"peter/pkg/claude"
-	"peter/pkg/config"
-	"peter/pkg/daemon"
-	"peter/pkg/gitlab"
+	"github.com/bilbo290/automatic/pkg/claude"
+	"github.com/bilbo290/automatic/pkg/config"
+	"github.com/bilbo290/automatic/pkg/daemon"
+	"github.com/bilbo290/automatic/pkg/gitlab"
 )
 
 func generateConfigTemplate() error {
@@ -233,10 +233,10 @@ func runInteractiveWorkflow(gitlabClient *gitlab.Client, cfg *config.Config) err
 	fmt.Printf("2. Debug MCP integration for this issue\n")
 	fmt.Printf("3. Exit\n")
 	fmt.Printf("Enter your choice (1-3): ")
-	
+
 	var choice int
 	fmt.Scanf("%d", &choice)
-	
+
 	switch choice {
 	case 1:
 		return processIssue(selectedIssue.IID, cfg)
@@ -264,7 +264,7 @@ func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool, s
 
 	// For semi-dry-run, we want to clone but not execute
 	actualDryRun := dryRun || semiDryRun
-	
+
 	process, err := claude.CreateProcessWithCallbackAndGitlabDryRun(
 		issueNumber,
 		processID,
@@ -303,7 +303,7 @@ func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool, s
 			fmt.Println("=== END DRY RUN ===")
 		} else {
 			fmt.Println("=== END SEMI-DRY RUN ===")
-			
+
 			// Additional checks in semi-dry-run mode
 			fmt.Println("\n=== REPOSITORY STATUS ===")
 			// Run git status in the repository directory
@@ -316,14 +316,14 @@ func processIssueWithOptions(issueNumber int, cfg *config.Config, dryRun bool, s
 					fmt.Printf("Git status:\n%s", output)
 				}
 			}
-			
+
 			// Show current branch
 			branchCmd := exec.Command("git", "branch", "--show-current")
 			branchCmd.Dir = process.Cmd.Dir
 			if output, err := branchCmd.Output(); err == nil {
 				fmt.Printf("Current branch: %s", output)
 			}
-			
+
 			// In semi-dry-run mode, show what cleanup would do
 			fmt.Printf("\n=== REPOSITORY CLEANUP ===\n")
 			fmt.Printf("After Claude finishes, the following cleanup would occur:\n")
@@ -353,13 +353,13 @@ func debugMCPForIssue(issueNumber int, cfg *config.Config) error {
 	projectPath := cfg.Projects.DefaultPath
 	if projectPath == "" {
 		fmt.Println("No project configured. Please select a project:")
-		// Note: This is a simplified fallback - in a real implementation, 
+		// Note: This is a simplified fallback - in a real implementation,
 		// you'd call project selection logic here
 		return fmt.Errorf("no project configured for MCP debug")
 	}
 
 	processManager := claude.NewProcessManager()
-	
+
 	process, err := claude.CreateMCPDebugProcess(issueNumber, cfg, projectPath)
 	if err != nil {
 		return fmt.Errorf("error creating MCP debug process: %v", err)
@@ -587,7 +587,7 @@ func main() {
 			fmt.Println("No project configured. Please run: go run main.go -interactive")
 			os.Exit(1)
 		}
-		
+
 		if err := claude.TestGitLabMCPIntegration(cfg, gitlabClient, projectPath); err != nil {
 			fmt.Printf("Error testing MCP: %v\n", err)
 			os.Exit(1)
