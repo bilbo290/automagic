@@ -10,19 +10,23 @@ go install github.com/your-username/peter@latest
 
 ## ⚙️ Setup
 
-1. **Create `peter.yaml`**:
-```yaml
-gitlab:
-  url: "https://gitlab.com"
-  token: "glpat-your-token-here"  # Get from GitLab Settings > Access Tokens
-  username: "your-username"
-
-claude:
-  command: "claude"
-  flags: "--dangerously-skip-permissions --output-format stream-json --verbose"
+1. **Generate config template**:
+```bash
+peter -generate-config
 ```
 
-2. **Select your project**:
+2. **Edit `.env` file** with your GitLab credentials:
+```bash
+# Peter GitLab Automation Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-your-token-here  # Get from GitLab Settings > Access Tokens
+GITLAB_USERNAME=your-username
+
+CLAUDE_COMMAND=claude
+CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json --verbose"
+```
+
+3. **Select your project**:
 ```bash
 peter -interactive
 ```

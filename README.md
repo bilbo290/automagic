@@ -31,33 +31,11 @@ Your GitLab Personal Access Token needs the following scopes:
 
 ## 📋 Configuration
 
-### 1. Create Configuration File
+### Environment Variables
 
-Create a `peter.yaml` file in your project directory:
+Peter uses environment variables for all configuration. You can set them directly in your shell or use a `.env` file.
 
-```yaml
-gitlab:
-  url: "https://gitlab.com"  # or your GitLab instance URL
-  token: "glpat-your-token-here"
-  username: "your-gitlab-username"
-
-claude:
-  command: "claude"
-  flags: "--dangerously-skip-permissions --output-format stream-json --verbose"
-
-projects:
-  default_path: ""  # Will be set via interactive mode
-
-daemon:
-  interval: 10  # Check for new issues every 10 seconds
-  claude_label: "claude"
-  process_label: "picked_up_by_claude"
-  review_label: "waiting_human_review"
-```
-
-### 2. Environment Variables (Alternative)
-
-You can also use environment variables instead of the YAML file:
+#### Option 1: Direct Environment Variables
 
 ```bash
 export GITLAB_URL="https://gitlab.com"
@@ -65,6 +43,35 @@ export GITLAB_TOKEN="glpat-your-token-here"
 export GITLAB_USERNAME="your-gitlab-username"
 export CLAUDE_COMMAND="claude"
 export CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json --verbose"
+```
+
+#### Option 2: .env File (Recommended)
+
+Generate a template configuration file:
+
+```bash
+peter -generate-config
+```
+
+Then edit the generated `.env` file:
+
+```bash
+# Peter GitLab Automation Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-your-token-here
+GITLAB_USERNAME=your-gitlab-username
+
+CLAUDE_COMMAND=claude
+CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json --verbose"
+
+# Optional: Set default project (will be set via interactive mode)
+DEFAULT_PROJECT_PATH=
+
+# Optional: Customize daemon behavior
+DAEMON_INTERVAL=10
+CLAUDE_LABEL=claude
+PROCESS_LABEL=picked_up_by_claude
+REVIEW_LABEL=waiting_human_review
 ```
 
 ## 🎯 Usage Modes
@@ -80,7 +87,7 @@ peter -interactive
 This will:
 1. List your accessible GitLab projects
 2. Let you select a project to monitor
-3. Save the selection to `peter.yaml`
+3. Save the selection to `.env` file
 4. Optionally process an issue immediately
 
 ### Daemon Mode (Recommended)
@@ -196,35 +203,31 @@ When satisfied with the implementation:
 
 ### Custom Claude Flags
 
-Modify the `claude.flags` in your configuration:
+Set custom Claude flags in your environment:
 
-```yaml
-claude:
-  flags: "--dangerously-skip-permissions --output-format stream-json --verbose --model claude-3-5-sonnet-20241022"
+```bash
+export CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json --verbose --model claude-3-5-sonnet-20241022"
 ```
 
 ### Different Polling Intervals
 
-```yaml
-daemon:
-  interval: 30  # Check every 30 seconds instead of 10
+```bash
+export DAEMON_INTERVAL=30  # Check every 30 seconds instead of 10
 ```
 
 ### Custom Label Names
 
-```yaml
-daemon:
-  claude_label: "ai-help"           # Instead of "claude"
-  process_label: "ai-working"       # Instead of "picked_up_by_claude"
-  review_label: "human-review"      # Instead of "waiting_human_review"
+```bash
+export CLAUDE_LABEL="ai-help"          # Instead of "claude"
+export PROCESS_LABEL="ai-working"      # Instead of "picked_up_by_claude" 
+export REVIEW_LABEL="human-review"     # Instead of "waiting_human_review"
 ```
 
 ## 📁 Project Structure
 
 ```
 your-project/
-├── peter.yaml          # Configuration file
-├── .env               # Optional environment variables
+├── .env               # Configuration file (environment variables)
 └── .git/              # Git repository (will be auto-cloned if needed)
 ```
 

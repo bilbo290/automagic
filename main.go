@@ -14,6 +14,32 @@ import (
 	"peter/pkg/gitlab"
 )
 
+func generateConfigTemplate() error {
+	template := `# Peter GitLab Automation Configuration
+# Edit these values with your GitLab credentials and preferences
+
+# GitLab Configuration (REQUIRED)
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-your-token-here
+GITLAB_USERNAME=your-gitlab-username
+
+# Claude Configuration
+CLAUDE_COMMAND=claude
+CLAUDE_FLAGS="--dangerously-skip-permissions --output-format stream-json --verbose"
+
+# Project Configuration (Optional - will be set via interactive mode)
+DEFAULT_PROJECT_PATH=
+
+# Daemon Configuration (Optional)
+DAEMON_INTERVAL=10
+CLAUDE_LABEL=claude
+PROCESS_LABEL=picked_up_by_claude
+REVIEW_LABEL=waiting_human_review
+`
+
+	return os.WriteFile(".env", []byte(template), 0644)
+}
+
 func selectProject(projects []gitlab.Project) (*gitlab.Project, error) {
 	if len(projects) == 0 {
 		return nil, fmt.Errorf("no projects available")
@@ -425,6 +451,7 @@ func main() {
 	var dryRun bool
 	var semiDryRun bool
 	var memoryMode bool
+	var generateConfig bool
 	flag.IntVar(&issueNumber, "issue", 0, "GitLab issue number to process")
 	flag.BoolVar(&listProjects, "list-projects", false, "List accessible GitLab projects")
 	flag.StringVar(&searchQuery, "search", "", "Search for projects by name")
@@ -439,7 +466,18 @@ func main() {
 	flag.BoolVar(&dryRun, "dry-run", false, "Show the prompt that would be sent to Claude without executing")
 	flag.BoolVar(&semiDryRun, "semi-dry-run", false, "Clone repository and show prompt without executing Claude")
 	flag.BoolVar(&memoryMode, "memory", false, "Enable SQLite session storage and resume functionality")
+	flag.BoolVar(&generateConfig, "generate-config", false, "Generate a template .env configuration file")
 	flag.Parse()
+
+	// Handle generate-config flag first
+	if generateConfig {
+		if err := generateConfigTemplate(); err != nil {
+			fmt.Printf("Error generating config template: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Generated .env template file. Please edit it with your GitLab credentials.")
+		return
+	}
 
 	// Check for conflicting flags
 	if dryRun && semiDryRun {
@@ -608,23 +646,24 @@ func main() {
 
 	if issueNumber == 0 {
 		fmt.Println("Error: Please provide an issue number using -issue flag")
-		fmt.Println("Usage: go run main.go -issue 123")
-		fmt.Println("       go run main.go -issue 123 -dry-run")
-		fmt.Println("       go run main.go -issue 123 -semi-dry-run")
-		fmt.Println("       go run main.go -list-projects")
-		fmt.Println("       go run main.go -search backend")
-		fmt.Println("       go run main.go -interactive")
-		fmt.Println("       go run main.go -list-issues")
-		fmt.Println("       go run main.go -list-issues -label open")
-		fmt.Println("       go run main.go -select-issue")
-		fmt.Println("       go run main.go -select-issue -label solved")
-		fmt.Println("       go run main.go -daemon")
-		fmt.Println("       go run main.go -daemon -memory")
-		fmt.Println("       go run main.go -daemon -dry-run")
-		fmt.Println("       go run main.go -daemon -semi-dry-run")
-		fmt.Println("       go run main.go -test-labels")
-		fmt.Println("       go run main.go -debug-mcp")
-		fmt.Println("       go run main.go -status")
+		fmt.Println("Usage: peter -issue 123")
+		fmt.Println("       peter -issue 123 -dry-run")
+		fmt.Println("       peter -issue 123 -semi-dry-run")
+		fmt.Println("       peter -generate-config")
+		fmt.Println("       peter -list-projects")
+		fmt.Println("       peter -search backend")
+		fmt.Println("       peter -interactive")
+		fmt.Println("       peter -list-issues")
+		fmt.Println("       peter -list-issues -label open")
+		fmt.Println("       peter -select-issue")
+		fmt.Println("       peter -select-issue -label solved")
+		fmt.Println("       peter -daemon")
+		fmt.Println("       peter -daemon -memory")
+		fmt.Println("       peter -daemon -dry-run")
+		fmt.Println("       peter -daemon -semi-dry-run")
+		fmt.Println("       peter -test-labels")
+		fmt.Println("       peter -debug-mcp")
+		fmt.Println("       peter -status")
 		os.Exit(1)
 	}
 
