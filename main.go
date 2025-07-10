@@ -424,6 +424,7 @@ func main() {
 	var processStatus bool
 	var dryRun bool
 	var semiDryRun bool
+	var memoryMode bool
 	flag.IntVar(&issueNumber, "issue", 0, "GitLab issue number to process")
 	flag.BoolVar(&listProjects, "list-projects", false, "List accessible GitLab projects")
 	flag.StringVar(&searchQuery, "search", "", "Search for projects by name")
@@ -437,6 +438,7 @@ func main() {
 	flag.BoolVar(&processStatus, "status", false, "Show process status (requires daemon mode)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Show the prompt that would be sent to Claude without executing")
 	flag.BoolVar(&semiDryRun, "semi-dry-run", false, "Clone repository and show prompt without executing Claude")
+	flag.BoolVar(&memoryMode, "memory", false, "Enable SQLite session storage and resume functionality")
 	flag.Parse()
 
 	// Check for conflicting flags
@@ -516,7 +518,7 @@ func main() {
 		} else {
 			d = daemon.New(gitlabClient, cfg)
 		}
-		if err := d.Run(); err != nil {
+		if err := d.RunWithMemoryMode(memoryMode); err != nil {
 			fmt.Printf("Error in daemon mode: %v\n", err)
 			os.Exit(1)
 		}
@@ -617,6 +619,7 @@ func main() {
 		fmt.Println("       go run main.go -select-issue")
 		fmt.Println("       go run main.go -select-issue -label solved")
 		fmt.Println("       go run main.go -daemon")
+		fmt.Println("       go run main.go -daemon -memory")
 		fmt.Println("       go run main.go -daemon -dry-run")
 		fmt.Println("       go run main.go -daemon -semi-dry-run")
 		fmt.Println("       go run main.go -test-labels")

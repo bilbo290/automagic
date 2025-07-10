@@ -326,6 +326,7 @@ T1: 15+ minutes
 ### 1. **Retrieve & Analyze Issue** 
    - Get issue details using GitLab MCP
    - Read the issue description thoroughly
+   - Read ALL existing comments on the issue to understand context and any previous attempts
    - Analyze the requirements and acceptance criteria
 
 ### 2. **Create and Post Implementation Plan** (REQUIRED)
@@ -419,57 +420,19 @@ T1: 15+ minutes
 }
 
 // cleanupRepositoryState cleans up the repository to prepare it for the next session
+// DISABLED: Repository cleanup is now disabled to allow reuse of worktree issues
 func cleanupRepositoryState(process *Process) {
-	fmt.Printf("Cleaning up repository state at: %s\n", process.WorkingDir)
+	fmt.Printf("Repository cleanup disabled - leaving repository state unchanged at: %s\n", process.WorkingDir)
+	fmt.Printf("Note: This allows reuse of existing worktree issues and preserves work in progress\n")
 	
-	// Change to the repository directory for git operations
-	originalDir, err := os.Getwd()
-	if err != nil {
-		fmt.Printf("Warning: failed to get current directory: %v\n", err)
-		return
-	}
+	// All cleanup operations are now disabled:
+	// - No git reset --hard HEAD
+	// - No git clean -fd
+	// - No branch switching
+	// - No branch deletion
+	// - No git pull
 	
-	if err := os.Chdir(process.WorkingDir); err != nil {
-		fmt.Printf("Warning: failed to change to repository directory: %v\n", err)
-		return
-	}
-	
-	// Ensure we change back to original directory
-	defer func() {
-		if err := os.Chdir(originalDir); err != nil {
-			fmt.Printf("Warning: failed to change back to original directory: %v\n", err)
-		}
-	}()
-	
-	// 1. Clean any uncommitted changes
-	if err := runGitCommand("reset", "--hard", "HEAD"); err != nil {
-		fmt.Printf("Warning: failed to reset changes: %v\n", err)
-	}
-	
-	// 2. Remove untracked files and directories
-	if err := runGitCommand("clean", "-fd"); err != nil {
-		fmt.Printf("Warning: failed to clean untracked files: %v\n", err)
-	}
-	
-	// 3. Switch back to main/master branch
-	mainBranch := detectMainBranch()
-	if mainBranch != "" {
-		if err := runGitCommand("checkout", mainBranch); err != nil {
-			fmt.Printf("Warning: failed to checkout %s branch: %v\n", mainBranch, err)
-		}
-	}
-	
-	// 4. Delete any issue branches that might have been created
-	if err := cleanupIssueBranches(); err != nil {
-		fmt.Printf("Warning: failed to cleanup issue branches: %v\n", err)
-	}
-	
-	// 5. Pull latest changes
-	if err := runGitCommand("pull"); err != nil {
-		fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
-	}
-	
-	fmt.Printf("Repository state cleaned up successfully\n")
+	// This allows Claude to continue working on existing branches and preserves any work in progress
 }
 
 // runGitCommand executes a git command with the given arguments

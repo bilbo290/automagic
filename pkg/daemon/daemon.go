@@ -184,21 +184,51 @@ func (d *Daemon) processIssueWithLabelUpdate(issue *gitlab.Issue) error {
 	}
 
 	// Update labels to mark as being processed
+	// Check if this is a human review response (has waiting_human_review label)
+	isHumanReviewResponse := false
+	for _, label := range issue.Labels {
+		if label == d.config.Daemon.ReviewLabel {
+			isHumanReviewResponse = true
+			break
+		}
+	}
+
 	newLabels := make([]string, 0)
 	for _, label := range issue.Labels {
-		if label != d.config.Daemon.ClaudeLabel {
+		// Remove both claude and waiting_human_review labels
+		if label != d.config.Daemon.ClaudeLabel && label != d.config.Daemon.ReviewLabel {
 			newLabels = append(newLabels, label)
 		}
 	}
+	// Always add picked_up_by_claude label
 	newLabels = append(newLabels, d.config.Daemon.ProcessLabel)
 
 	if d.dryRun {
-		fmt.Printf("[%s] [DRY RUN] Would update labels: remove '%s', add '%s'\n", timestamp, d.config.Daemon.ClaudeLabel, d.config.Daemon.ProcessLabel)
+		if isHumanReviewResponse {
+			fmt.Printf("[%s] [DRY RUN] Would update labels: remove '%s', add '%s' (human review response)\n", 
+				timestamp, d.config.Daemon.ReviewLabel, d.config.Daemon.ProcessLabel)
+		} else {
+			fmt.Printf("[%s] [DRY RUN] Would update labels: remove '%s', add '%s'\n", 
+				timestamp, d.config.Daemon.ClaudeLabel, d.config.Daemon.ProcessLabel)
+		}
 	} else if d.semiDryRun {
-		fmt.Printf("[%s] [SEMI-DRY RUN] Would update labels: remove '%s', add '%s'\n", timestamp, d.config.Daemon.ClaudeLabel, d.config.Daemon.ProcessLabel)
+		if isHumanReviewResponse {
+			fmt.Printf("[%s] [SEMI-DRY RUN] Would update labels: remove '%s', add '%s' (human review response)\n", 
+				timestamp, d.config.Daemon.ReviewLabel, d.config.Daemon.ProcessLabel)
+		} else {
+			fmt.Printf("[%s] [SEMI-DRY RUN] Would update labels: remove '%s', add '%s'\n", 
+				timestamp, d.config.Daemon.ClaudeLabel, d.config.Daemon.ProcessLabel)
+		}
 	} else {
 		if err := d.gitlabClient.UpdateIssueLabels(d.selectedProject, issue.IID, newLabels); err != nil {
 			return fmt.Errorf("failed to update issue labels: %v", err)
+		}
+		if isHumanReviewResponse {
+			fmt.Printf("[%s] Updated labels: removed '%s', added '%s' (continuing human review loop)\n", 
+				timestamp, d.config.Daemon.ReviewLabel, d.config.Daemon.ProcessLabel)
+		} else {
+			fmt.Printf("[%s] Updated labels: removed '%s', added '%s'\n", 
+				timestamp, d.config.Daemon.ClaudeLabel, d.config.Daemon.ProcessLabel)
 		}
 	}
 
@@ -703,6 +733,143 @@ func (d *Daemon) checkForNewClaudeIssuesWithContext(ctx context.Context, process
 	return newIssues, nil
 }
 
+func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, processedIssues map[int]bool, timestamp string) (int, error) {
+	// Check if context is already cancelled
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+	
+	// Fetch issues with the waiting_human_review label
+	fmt.Printf("[%s] DEBUG: Fetching issues with label '%s' from project '%s'...\n", timestamp, d.config.Daemon.ReviewLabel, d.selectedProject)
+	
+	// Create a timeout context for the API call
+	apiCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	
+	// Use a channel to make the API call cancellable
+	type result struct {
+		issues []gitlab.Issue
+		err    error
+	}
+	
+	resultCh := make(chan result, 1)
+	go func() {
+		issues, err := d.gitlabClient.GetProjectIssues(d.selectedProject, []string{d.config.Daemon.ReviewLabel}, "opened")
+		resultCh <- result{issues: issues, err: err}
+	}()
+	
+	// Wait for either the result or context cancellation
+	var issues []gitlab.Issue
+	var err error
+	select {
+	case <-apiCtx.Done():
+		fmt.Printf("[%s] DEBUG: API call timed out or was cancelled\n", timestamp)
+		return 0, apiCtx.Err()
+	case res := <-resultCh:
+		issues = res.issues
+		err = res.err
+	}
+	
+	if err != nil {
+		fmt.Printf("[%s] DEBUG: Failed to fetch review issues: %v\n", timestamp, err)
+		return 0, fmt.Errorf("failed to fetch review issues: %v", err)
+	}
+	fmt.Printf("[%s] DEBUG: Successfully fetched %d issues with review label\n", timestamp, len(issues))
+
+	newSessions := 0
+	for _, issue := range issues {
+		// Check for cancellation between issues
+		select {
+		case <-ctx.Done():
+			return newSessions, ctx.Err()
+		default:
+		}
+		
+		// Skip if already processed in this cycle
+		if processedIssues[issue.IID] {
+			continue
+		}
+		
+		// Get the latest comments to check if last comment is from human
+		fmt.Printf("[%s] DEBUG: Checking latest comments for issue #%d\n", timestamp, issue.IID)
+		
+		// Create a timeout context for comment checking
+		commentCtx, commentCancel := context.WithTimeout(ctx, 8*time.Second)
+		defer commentCancel()
+		
+		type commentResult struct {
+			comments []gitlab.Note
+			err      error
+		}
+		
+		commentCh := make(chan commentResult, 1)
+		go func() {
+			// Get all discussions/comments for this issue
+			discussions, err := d.gitlabClient.GetIssueDiscussions(d.selectedProject, issue.IID)
+			if err != nil {
+				commentCh <- commentResult{comments: nil, err: err}
+				return
+			}
+			
+			// Flatten all notes from all discussions
+			var allNotes []gitlab.Note
+			for _, discussion := range discussions {
+				allNotes = append(allNotes, discussion.Notes...)
+			}
+			
+			commentCh <- commentResult{comments: allNotes, err: nil}
+		}()
+		
+		var comments []gitlab.Note
+		select {
+		case <-commentCtx.Done():
+			fmt.Printf("[%s] DEBUG: Comment checking timed out for issue #%d\n", timestamp, issue.IID)
+			commentCancel()
+			continue
+		case res := <-commentCh:
+			comments = res.comments
+			err = res.err
+		}
+		commentCancel()
+		
+		if err != nil {
+			fmt.Printf("[%s] Error getting comments for issue #%d: %v\n", timestamp, issue.IID, err)
+			continue
+		}
+		
+		// Check if the last comment is from a human (not gitlab-claude-bot)
+		if len(comments) > 0 {
+			lastComment := comments[len(comments)-1]
+			isHumanComment := lastComment.Author.Username != "gitlab-claude-bot"
+			
+			fmt.Printf("[%s] DEBUG: Issue #%d last comment by @%s (human: %v)\n", 
+				timestamp, issue.IID, lastComment.Author.Username, isHumanComment)
+			
+			if isHumanComment {
+				// Mark as processed and start new session
+				processedIssues[issue.IID] = true
+				newSessions++
+				
+				fmt.Printf("[%s] Found issue #%d with human comment from @%s: %s\n", 
+					timestamp, issue.IID, lastComment.Author.Username, issue.Title)
+				
+				// Process issue asynchronously with automatic label updates
+				if err := d.processIssueWithLabelUpdate(&issue); err != nil {
+					fmt.Printf("[%s] Failed to start processing issue #%d: %v\n", timestamp, issue.IID, err)
+				} else {
+					fmt.Printf("[%s] Started new Claude session for issue #%d (human review response)\n", timestamp, issue.IID)
+				}
+			}
+		} else {
+			fmt.Printf("[%s] DEBUG: Issue #%d has no comments, skipping\n", timestamp, issue.IID)
+		}
+	}
+
+	return newSessions, nil
+}
+
 func (d *Daemon) checkForReviewIssuesWithComments(timestamp string) (int, error) {
 	// Fetch issues with the review label (waiting for human review)
 	fmt.Printf("[%s] DEBUG: Fetching issues with label '%s' from project '%s'...\n", timestamp, d.config.Daemon.ReviewLabel, d.selectedProject)
@@ -1048,6 +1215,148 @@ func (d *Daemon) Run() error {
 			// Summary
 			if newIssues > 0 || resumedIssues > 0 {
 				fmt.Printf("[%s] Activity: %d new sessions started, %d sessions resumed\n", timestamp, newIssues, resumedIssues)
+			} else {
+				fmt.Printf("[%s] No new activity found\n", timestamp)
+			}
+			fmt.Printf("[%s] DEBUG: Finished polling cycle, waiting for next tick...\n", timestamp)
+		}
+	}
+}
+
+func (d *Daemon) RunWithMemoryMode(memoryMode bool) error {
+	if memoryMode {
+		// Use existing Run() method with SQLite session storage
+		return d.Run()
+	} else {
+		// Run without memory - create new sessions without resuming
+		return d.RunWithoutMemory()
+	}
+}
+
+func (d *Daemon) RunWithoutMemory() error {
+	// Step 1: Select project interactively
+	fmt.Printf("=== Project Selection for Daemon Mode ===\n")
+	projects, err := d.gitlabClient.GetAccessibleProjects()
+	if err != nil {
+		return fmt.Errorf("error fetching projects: %v", err)
+	}
+
+	selectedProject, err := d.selectProject(projects)
+	if err != nil {
+		return fmt.Errorf("error selecting project: %v", err)
+	}
+
+	d.selectedProject = selectedProject.PathWithNamespace
+	fmt.Printf("Project selected: %s\n", d.selectedProject)
+
+	// Step 2: Start daemon monitoring
+	fmt.Printf("\n=== Starting Daemon Mode (No Memory) ===\n")
+	if d.dryRun {
+		fmt.Printf("*** DRY RUN MODE - No actual processing will occur ***\n")
+	} else if d.semiDryRun {
+		fmt.Printf("*** SEMI-DRY RUN MODE - Will clone repositories but not execute Claude ***\n")
+	}
+	fmt.Printf("Monitoring project: %s\n", d.selectedProject)
+	fmt.Printf("Monitoring for issues with label: %s\n", d.config.Daemon.ClaudeLabel)
+	fmt.Printf("Processing interval: %d seconds\n", d.config.Daemon.Interval)
+	fmt.Printf("Memory mode: DISABLED (no session resumption)\n")
+	fmt.Printf("Press Ctrl+C to stop...\n\n")
+
+	// Set up signal handling for graceful shutdown with context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	
+	// Cancel context when signal received
+	go func() {
+		<-sigCh
+		fmt.Printf("\nReceived shutdown signal. Cancelling operations...\n")
+		cancel()
+	}()
+
+	// Keep track of processed issues to avoid duplicates
+	processedIssues := make(map[int]bool)
+
+	ticker := time.NewTicker(time.Duration(d.config.Daemon.Interval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("\nReceived shutdown signal. Stopping daemon...\n")
+			
+			// Gracefully stop any running processes
+			runningProcesses := d.processManager.GetRunningProcesses()
+			totalProcesses := len(runningProcesses)
+			
+			if totalProcesses > 0 {
+				fmt.Printf("Terminating %d running Claude processes...\n", totalProcesses)
+				
+				// Terminate regular Claude processes
+				for _, process := range runningProcesses {
+					if process.Cmd != nil && process.Cmd.Process != nil {
+						fmt.Printf("  Terminating process for issue #%d (PID: %d)\n", process.IssueNum, process.Cmd.Process.Pid)
+						process.Cmd.Process.Signal(syscall.SIGTERM)
+					}
+				}
+				
+				// Give processes a moment to terminate gracefully
+				fmt.Printf("Waiting 3 seconds for processes to terminate...\n")
+				time.Sleep(3 * time.Second)
+				
+				// Force kill any remaining processes
+				for _, process := range runningProcesses {
+					if process.Cmd != nil && process.Cmd.Process != nil {
+						process.Cmd.Process.Kill()
+					}
+				}
+			}
+			
+			fmt.Printf("Daemon stopped.\n")
+			return nil
+
+		case <-ticker.C:
+			// Check if context was cancelled before starting work
+			select {
+			case <-ctx.Done():
+				fmt.Printf("\nOperation cancelled before processing\n")
+				return nil
+			default:
+			}
+			
+			timestamp := time.Now().Format("2006-01-02 15:04:05")
+			fmt.Printf("[%s] Checking for issues to process...\n", timestamp)
+
+			// Check for new issues with 'claude' label
+			fmt.Printf("[%s] DEBUG: Starting checkForNewClaudeIssues...\n", timestamp)
+			newIssues, err := d.checkForNewClaudeIssuesWithContext(ctx, processedIssues, timestamp)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Printf("[%s] Operation cancelled by user\n", timestamp)
+					continue
+				}
+				fmt.Printf("[%s] Error checking for new claude issues: %v\n", timestamp, err)
+			}
+			fmt.Printf("[%s] DEBUG: Finished checkForNewClaudeIssues, found %d new issues\n", timestamp, newIssues)
+
+			// Check for issues with 'waiting_human_review' label that have human comments
+			fmt.Printf("[%s] DEBUG: Starting checkForHumanReviewIssues...\n", timestamp)
+			reviewIssues, err := d.checkForHumanReviewIssuesWithContext(ctx, processedIssues, timestamp)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Printf("[%s] Operation cancelled by user\n", timestamp)
+					continue
+				}
+				fmt.Printf("[%s] Error checking for human review issues: %v\n", timestamp, err)
+			}
+			fmt.Printf("[%s] DEBUG: Finished checkForHumanReviewIssues, found %d issues with human comments\n", timestamp, reviewIssues)
+
+			// Summary
+			totalNewSessions := newIssues + reviewIssues
+			if totalNewSessions > 0 {
+				fmt.Printf("[%s] Activity: %d new sessions started (%d claude label, %d human review)\n", timestamp, totalNewSessions, newIssues, reviewIssues)
 			} else {
 				fmt.Printf("[%s] No new activity found\n", timestamp)
 			}

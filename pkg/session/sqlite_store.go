@@ -48,23 +48,37 @@ func NewSQLiteSessionStore(dataDir string) (*SQLiteSessionStore, error) {
 
 // createTables creates the necessary tables
 func (s *SQLiteSessionStore) createTables() error {
-	query := `
+	// First create the table with original schema if it doesn't exist
+	createTableQuery := `
 	CREATE TABLE IF NOT EXISTS completed_sessions (
 		issue_iid INTEGER PRIMARY KEY,
 		session_id TEXT NOT NULL,
 		project_path TEXT NOT NULL,
 		completion_time INTEGER NOT NULL,
-		last_comment_time INTEGER,
-		working_dir TEXT,
-		claude_command TEXT,
-		claude_flags TEXT,
-		env_vars TEXT
+		last_comment_time INTEGER
 	);
-	
-	CREATE INDEX IF NOT EXISTS idx_completion_time ON completed_sessions(completion_time);
 	`
-
-	_, err := s.db.Exec(query)
+	
+	if _, err := s.db.Exec(createTableQuery); err != nil {
+		return err
+	}
+	
+	// Now add the new columns if they don't exist (migration)
+	migrationQueries := []string{
+		`ALTER TABLE completed_sessions ADD COLUMN working_dir TEXT`,
+		`ALTER TABLE completed_sessions ADD COLUMN claude_command TEXT`,
+		`ALTER TABLE completed_sessions ADD COLUMN claude_flags TEXT`,
+		`ALTER TABLE completed_sessions ADD COLUMN env_vars TEXT`,
+	}
+	
+	for _, query := range migrationQueries {
+		// These will fail if columns already exist, which is expected
+		s.db.Exec(query)
+	}
+	
+	// Create index
+	indexQuery := `CREATE INDEX IF NOT EXISTS idx_completion_time ON completed_sessions(completion_time);`
+	_, err := s.db.Exec(indexQuery)
 	return err
 }
 
