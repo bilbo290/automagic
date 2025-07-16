@@ -425,7 +425,8 @@ func (c *Client) CreateIssueNote(projectPath string, issueIID int, body string) 
 }
 
 func (c *Client) GetAssignedMergeRequests(username string, state string) ([]MergeRequest, error) {
-	endpoint := fmt.Sprintf("/merge_requests?assignee_username=%s&per_page=100", username)
+	// Try with scope=all to get MRs from all accessible projects
+	endpoint := fmt.Sprintf("/merge_requests?assignee_username=%s&scope=all&per_page=100", username)
 
 	if state != "" {
 		endpoint += "&state=" + state
@@ -445,7 +446,8 @@ func (c *Client) GetAssignedMergeRequests(username string, state string) ([]Merg
 }
 
 func (c *Client) GetMergeRequestsForReview(username string, state string) ([]MergeRequest, error) {
-	endpoint := fmt.Sprintf("/merge_requests?reviewer_username=%s&per_page=100", username)
+	// Try with scope=all to get MRs from all accessible projects
+	endpoint := fmt.Sprintf("/merge_requests?reviewer_username=%s&scope=all&per_page=100", username)
 
 	if state != "" {
 		endpoint += "&state=" + state
@@ -609,4 +611,81 @@ func (c *Client) GetCurrentUser() (*User, error) {
 	}
 
 	return &user, nil
+}
+
+// GetAssignedMergeRequestsByID fetches MRs by user ID instead of username
+func (c *Client) GetAssignedMergeRequestsByID(userID int, state string) ([]MergeRequest, error) {
+	endpoint := fmt.Sprintf("/merge_requests?assignee_id=%d&scope=all&per_page=100", userID)
+
+	if state != "" {
+		endpoint += "&state=" + state
+	}
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var mergeRequests []MergeRequest
+	if err := json.Unmarshal(body, &mergeRequests); err != nil {
+		return nil, fmt.Errorf("failed to parse merge requests: %v", err)
+	}
+
+	return mergeRequests, nil
+}
+
+// UpdateMergeRequestLabels updates the labels on a merge request
+func (c *Client) UpdateMergeRequestLabels(projectID int, mergeRequestIID int, labels []string) error {
+	// Ensure we're using the API endpoint
+	baseURL := c.BaseURL
+	if !strings.HasSuffix(baseURL, "/api/v4") {
+		baseURL = strings.TrimRight(baseURL, "/") + "/api/v4"
+	}
+	
+	endpoint := fmt.Sprintf("/projects/%d/merge_requests/%d", projectID, mergeRequestIID)
+	fullURL := baseURL + endpoint
+
+	// Create the request body with proper JSON format
+	labelsStr := strings.Join(labels, ",")
+	body := fmt.Sprintf(`{"labels": "%s"}`, labelsStr)
+
+	req, err := http.NewRequest("PUT", fullURL, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Use Private-Token header instead of Bearer for GitLab API
+	req.Header.Set("Private-Token", c.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update MR labels: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+
+// GetProjectByID gets project information by project ID
+func (c *Client) GetProjectByID(projectID int) (*Project, error) {
+	endpoint := fmt.Sprintf("/projects/%d", projectID)
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var project Project
+	if err := json.Unmarshal(body, &project); err != nil {
+		return nil, fmt.Errorf("failed to parse project: %v", err)
+	}
+
+	return &project, nil
 }

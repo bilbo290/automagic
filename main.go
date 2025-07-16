@@ -552,6 +552,9 @@ func main() {
 	flag.BoolVar(&generateConfig, "generate-config", false, "Generate a template .env configuration file")
 	flag.BoolVar(&listMRs, "list-mrs", false, "List assigned merge requests")
 	flag.IntVar(&reviewMR, "review-mr", 0, "Review a specific merge request with Claude")
+	
+	var testMRFetch bool
+	flag.BoolVar(&testMRFetch, "test-mr-fetch", false, "Test merge request fetching with debug output")
 	flag.Parse()
 
 	// Handle generate-config flag first
@@ -593,6 +596,53 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("GitLab connection successful!\n")
+
+	// Test MR fetching if requested
+	if testMRFetch {
+		fmt.Println("\n=== Testing Merge Request Fetching ===")
+		
+		// Get current user info
+		currentUser, err := gitlabClient.GetCurrentUser()
+		if err != nil {
+			fmt.Printf("Error fetching current user: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Current user: %s (@%s, ID: %d)\n\n", currentUser.Name, currentUser.Username, currentUser.ID)
+
+		// Test by username
+		fmt.Printf("Testing fetch by username '%s'...\n", cfg.GitLab.Username)
+		assignedMRs, err := gitlabClient.GetAssignedMergeRequests(cfg.GitLab.Username, "opened")
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+		} else {
+			fmt.Printf("Found %d MRs assigned by username\n", len(assignedMRs))
+		}
+
+		// Test by user ID
+		fmt.Printf("\nTesting fetch by user ID %d...\n", currentUser.ID)
+		assignedMRsByID, err := gitlabClient.GetAssignedMergeRequestsByID(currentUser.ID, "opened")
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+		} else {
+			fmt.Printf("Found %d MRs assigned by ID\n", len(assignedMRsByID))
+			for i, mr := range assignedMRsByID {
+				if i < 3 { // Show first 3
+					fmt.Printf("  !%d - %s (Project: %d)\n", mr.IID, mr.Title, mr.ProjectID)
+				}
+			}
+		}
+
+		// Test reviewer MRs
+		fmt.Printf("\nTesting fetch for review by username '%s'...\n", cfg.GitLab.Username)
+		reviewMRs, err := gitlabClient.GetMergeRequestsForReview(cfg.GitLab.Username, "opened")
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+		} else {
+			fmt.Printf("Found %d MRs for review\n", len(reviewMRs))
+		}
+
+		os.Exit(0)
+	}
 
 	if listProjects {
 		projects, err := gitlabClient.GetAccessibleProjects()
