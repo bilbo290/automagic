@@ -731,7 +731,7 @@ func (d *Daemon) checkForMergeRequestsWithContext(ctx context.Context, processed
 		return 0, fmt.Errorf("failed to get current user: %v", userErr)
 	}
 
-	// Fetch assigned merge requests (silently)
+	// Fetch merge requests where bot is assigned as reviewer (silently)
 
 	// Create a timeout context for the API call
 	apiCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -745,16 +745,16 @@ func (d *Daemon) checkForMergeRequestsWithContext(ctx context.Context, processed
 
 	resultCh := make(chan result, 1)
 	go func() {
-		// Get assigned merge requests using the bot's user ID
-		assignedMRs, err1 := d.gitlabClient.GetAssignedMergeRequestsByID(currentUser.ID, "opened")
+		// Get merge requests where the bot is assigned as reviewer
+		reviewMRs, err1 := d.gitlabClient.GetMergeRequestsForReview(currentUser.Username, "opened")
 		if err1 != nil {
 			resultCh <- result{mergeRequests: nil, err: err1}
 			return
 		}
 
-		// Use assigned MRs only (bot account)
+		// Use reviewer MRs (bot is assigned as reviewer)
 
-		resultCh <- result{mergeRequests: assignedMRs, err: nil}
+		resultCh <- result{mergeRequests: reviewMRs, err: nil}
 	}()
 
 	// Wait for either the result or context cancellation
