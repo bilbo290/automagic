@@ -381,6 +381,69 @@ func debugMCPForIssue(issueNumber int, cfg *config.Config) error {
 	return nil
 }
 
+func processMergeRequest(mr *gitlab.MergeRequest, cfg *config.Config) error {
+	processManager := claude.NewProcessManager()
+
+	fmt.Printf("Processing merge request !%d...\n", mr.IID)
+
+	processID := fmt.Sprintf("mr-%d-%d", mr.IID, time.Now().Unix())
+
+	// Custom prompt for merge request review
+	prompt := fmt.Sprintf(`# Review Merge Request !%d
+
+## Merge Request Information
+- **Title**: %s
+- **Source Branch**: %s
+- **Target Branch**: %s
+- **Author**: @%s
+- **URL**: %s
+
+## Review Instructions
+1. **Fetch the merge request details** using GitLab MCP tools
+2. **Analyze the changes** in the merge request
+3. **Review the code** for:
+   - Code quality and best practices
+   - Security vulnerabilities
+   - Performance issues
+   - Documentation completeness
+   - Test coverage
+4. **Check discussions** for any existing feedback
+5. **Provide comprehensive feedback** as a comment on the merge request
+
+## Review Criteria
+- Code follows project standards and conventions
+- Changes are well-documented
+- Security best practices are followed
+- Performance considerations are addressed
+- Tests are adequate and passing
+- No obvious bugs or issues
+
+Please provide constructive feedback and approve or request changes as appropriate.
+Use GitLab MCP tools to interact with the merge request.
+`, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, mr.Author.Username, mr.WebURL)
+
+	process, err := claude.CreateProcess(
+		mr.IID,
+		processID,
+		cfg.Claude.Command,
+		cfg.Claude.Flags,
+		cfg.Projects.DefaultPath,
+		cfg.GitLab.Username,
+		prompt,
+	)
+	if err != nil {
+		return fmt.Errorf("error creating claude process: %v", err)
+	}
+
+	processManager.AddProcess(process)
+
+	if err := claude.RunProcess(process); err != nil {
+		return fmt.Errorf("error executing claude command: %v", err)
+	}
+
+	return nil
+}
+
 func testLabelFiltering(gitlabClient *gitlab.Client, cfg *config.Config) error {
 	if cfg.Projects.DefaultPath == "" {
 		return fmt.Errorf("no project configured. Please run with -interactive first")
@@ -470,6 +533,8 @@ func main() {
 	var semiDryRun bool
 	var memoryMode bool
 	var generateConfig bool
+	var listMRs bool
+	var reviewMR int
 	flag.IntVar(&issueNumber, "issue", 0, "GitLab issue number to process")
 	flag.BoolVar(&listProjects, "list-projects", false, "List accessible GitLab projects")
 	flag.StringVar(&searchQuery, "search", "", "Search for projects by name")
@@ -485,6 +550,8 @@ func main() {
 	flag.BoolVar(&semiDryRun, "semi-dry-run", false, "Clone repository and show prompt without executing Claude")
 	flag.BoolVar(&memoryMode, "memory", false, "Enable SQLite session storage and resume functionality")
 	flag.BoolVar(&generateConfig, "generate-config", false, "Generate a template .env configuration file")
+	flag.BoolVar(&listMRs, "list-mrs", false, "List assigned merge requests")
+	flag.IntVar(&reviewMR, "review-mr", 0, "Review a specific merge request with Claude")
 	flag.Parse()
 
 	// Handle generate-config flag first
@@ -598,6 +665,76 @@ func main() {
 		return
 	}
 
+	if listMRs {
+		fmt.Printf("Listing assigned merge requests for user: %s\n\n", cfg.GitLab.Username)
+		
+		// Get assigned merge requests
+		assignedMRs, err := gitlabClient.GetAssignedMergeRequests(cfg.GitLab.Username, "opened")
+		if err != nil {
+			fmt.Printf("Error fetching assigned merge requests: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Get merge requests for review
+		reviewMRs, err := gitlabClient.GetMergeRequestsForReview(cfg.GitLab.Username, "opened")
+		if err != nil {
+			fmt.Printf("Error fetching review merge requests: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Display assigned MRs
+		if len(assignedMRs) > 0 {
+			fmt.Printf("=== Assigned Merge Requests (%d) ===\n", len(assignedMRs))
+			for _, mr := range assignedMRs {
+				fmt.Printf("!%d: %s\n", mr.IID, mr.Title)
+				fmt.Printf("  Author: %s\n", mr.Author.Name)
+				fmt.Printf("  Source: %s → %s\n", mr.SourceBranch, mr.TargetBranch)
+				fmt.Printf("  State: %s\n", mr.State)
+				fmt.Printf("  URL: %s\n\n", mr.WebURL)
+			}
+		} else {
+			fmt.Printf("No assigned merge requests found.\n\n")
+		}
+
+		// Display review MRs
+		if len(reviewMRs) > 0 {
+			fmt.Printf("=== Merge Requests for Review (%d) ===\n", len(reviewMRs))
+			for _, mr := range reviewMRs {
+				fmt.Printf("!%d: %s\n", mr.IID, mr.Title)
+				fmt.Printf("  Author: %s\n", mr.Author.Name)
+				fmt.Printf("  Source: %s → %s\n", mr.SourceBranch, mr.TargetBranch)
+				fmt.Printf("  State: %s\n", mr.State)
+				fmt.Printf("  URL: %s\n\n", mr.WebURL)
+			}
+		} else {
+			fmt.Printf("No merge requests for review found.\n\n")
+		}
+		return
+	}
+
+	if reviewMR > 0 {
+		if cfg.Projects.DefaultPath == "" {
+			fmt.Println("Error: No project selected. Please run: go run main.go -interactive")
+			os.Exit(1)
+		}
+
+		fmt.Printf("Reviewing merge request !%d with Claude...\n", reviewMR)
+		
+		// Get the merge request details
+		mr, err := gitlabClient.GetMergeRequest(cfg.Projects.DefaultPath, reviewMR)
+		if err != nil {
+			fmt.Printf("Error fetching merge request: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Process the merge request with Claude
+		if err := processMergeRequest(mr, cfg); err != nil {
+			fmt.Printf("Error processing merge request: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if debugMCP {
 		// Get project path from config or interactive selection
 		projectPath := cfg.Projects.DefaultPath
@@ -682,6 +819,8 @@ func main() {
 		fmt.Println("       automagic -test-labels")
 		fmt.Println("       automagic -debug-mcp")
 		fmt.Println("       automagic -status")
+		fmt.Println("       automagic -list-mrs")
+		fmt.Println("       automagic -review-mr 123")
 		os.Exit(1)
 	}
 

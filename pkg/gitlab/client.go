@@ -45,6 +45,41 @@ type Project struct {
 	LastActivityAt    string `json:"last_activity_at"`
 }
 
+type MergeRequest struct {
+	ID           int    `json:"id"`
+	IID          int    `json:"iid"`
+	ProjectID    int    `json:"project_id"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	State        string `json:"state"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	WebURL       string `json:"web_url"`
+	Author       struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
+	} `json:"author"`
+	Assignee struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
+	} `json:"assignee"`
+	Assignees []struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
+	} `json:"assignees"`
+	Reviewers []struct {
+		ID       int    `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
+	} `json:"reviewers"`
+	Labels []string `json:"labels"`
+}
+
 type Discussion struct {
 	ID    string `json:"id"`
 	Notes []Note `json:"notes"`
@@ -239,11 +274,11 @@ func (c *Client) GetIssueDiscussions(projectPath string, issueIID int) ([]Discus
 
 func (c *Client) GetIssueDiscussionsWithContext(ctx context.Context, projectPath string, issueIID int) ([]Discussion, error) {
 	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
-	
+
 	var allDiscussions []Discussion
 	page := 1
 	perPage := 100 // Get more items per page
-	
+
 	for {
 		endpoint := fmt.Sprintf("/projects/%s/issues/%d/discussions?per_page=%d&page=%d", encodedPath, issueIID, perPage, page)
 
@@ -258,14 +293,14 @@ func (c *Client) GetIssueDiscussionsWithContext(ctx context.Context, projectPath
 		}
 
 		allDiscussions = append(allDiscussions, discussions...)
-		
+
 		// If we got fewer items than per_page, we've reached the end
 		if len(discussions) < perPage {
 			break
 		}
-		
+
 		page++
-		
+
 		// Safety check to prevent infinite loops (max 50 pages = 5000 discussions)
 		if page > 50 {
 			break
@@ -387,4 +422,191 @@ func (c *Client) CreateIssueNote(projectPath string, issueIID int, body string) 
 	}
 
 	return &note, nil
+}
+
+func (c *Client) GetAssignedMergeRequests(username string, state string) ([]MergeRequest, error) {
+	endpoint := fmt.Sprintf("/merge_requests?assignee_username=%s&per_page=100", username)
+
+	if state != "" {
+		endpoint += "&state=" + state
+	}
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var mergeRequests []MergeRequest
+	if err := json.Unmarshal(body, &mergeRequests); err != nil {
+		return nil, fmt.Errorf("failed to parse merge requests: %v", err)
+	}
+
+	return mergeRequests, nil
+}
+
+func (c *Client) GetMergeRequestsForReview(username string, state string) ([]MergeRequest, error) {
+	endpoint := fmt.Sprintf("/merge_requests?reviewer_username=%s&per_page=100", username)
+
+	if state != "" {
+		endpoint += "&state=" + state
+	}
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var mergeRequests []MergeRequest
+	if err := json.Unmarshal(body, &mergeRequests); err != nil {
+		return nil, fmt.Errorf("failed to parse merge requests: %v", err)
+	}
+
+	return mergeRequests, nil
+}
+
+func (c *Client) GetProjectMergeRequests(projectPath string, state string) ([]MergeRequest, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests?per_page=100", encodedPath)
+
+	if state != "" {
+		endpoint += "&state=" + state
+	}
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var mergeRequests []MergeRequest
+	if err := json.Unmarshal(body, &mergeRequests); err != nil {
+		return nil, fmt.Errorf("failed to parse merge requests: %v", err)
+	}
+
+	return mergeRequests, nil
+}
+
+func (c *Client) GetMergeRequest(projectPath string, mergeRequestIID int) (*MergeRequest, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d", encodedPath, mergeRequestIID)
+
+	body, err := c.makeRequest(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var mergeRequest MergeRequest
+	if err := json.Unmarshal(body, &mergeRequest); err != nil {
+		return nil, fmt.Errorf("failed to parse merge request: %v", err)
+	}
+
+	return &mergeRequest, nil
+}
+
+func (c *Client) GetMergeRequestDiscussions(projectPath string, mergeRequestIID int) ([]Discussion, error) {
+	return c.GetMergeRequestDiscussionsWithContext(context.Background(), projectPath, mergeRequestIID)
+}
+
+func (c *Client) GetMergeRequestDiscussionsWithContext(ctx context.Context, projectPath string, mergeRequestIID int) ([]Discussion, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+
+	var allDiscussions []Discussion
+	page := 1
+	perPage := 100
+
+	for {
+		endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions?per_page=%d&page=%d", encodedPath, mergeRequestIID, perPage, page)
+
+		body, err := c.makeRequestWithContext(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		var discussions []Discussion
+		if err := json.Unmarshal(body, &discussions); err != nil {
+			return nil, fmt.Errorf("failed to parse discussions: %v", err)
+		}
+
+		allDiscussions = append(allDiscussions, discussions...)
+
+		if len(discussions) < perPage {
+			break
+		}
+
+		page++
+
+		if page > 50 {
+			break
+		}
+	}
+
+	return allDiscussions, nil
+}
+
+func (c *Client) CreateMergeRequestNote(projectPath string, mergeRequestIID int, body string) (*Note, error) {
+	encodedPath := strings.ReplaceAll(projectPath, "/", "%2F")
+	url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d/notes", c.BaseURL, encodedPath, mergeRequestIID)
+
+	payload := map[string]string{
+		"body": body,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonPayload)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("failed to create note: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var note Note
+	if err := json.Unmarshal(respBody, &note); err != nil {
+		return nil, fmt.Errorf("failed to parse note response: %v", err)
+	}
+
+	return &note, nil
+}
+
+// User represents a GitLab user
+type User struct {
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	State    string `json:"state"`
+	WebURL   string `json:"web_url"`
+}
+
+// GetCurrentUser returns information about the authenticated user
+func (c *Client) GetCurrentUser() (*User, error) {
+	respBody, err := c.makeRequest("/user")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current user: %v", err)
+	}
+
+	var user User
+	if err := json.Unmarshal(respBody, &user); err != nil {
+		return nil, fmt.Errorf("failed to parse user response: %v", err)
+	}
+
+	return &user, nil
 }

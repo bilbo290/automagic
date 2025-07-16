@@ -754,6 +754,179 @@ func (d *Daemon) checkForNewClaudeIssuesWithContext(ctx context.Context, process
 	return newIssues, nil
 }
 
+func (d *Daemon) checkForMergeRequestsWithContext(ctx context.Context, processedMRs map[int]bool, timestamp string) (int, error) {
+	// Check if context is already cancelled
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+
+	// Fetch assigned merge requests
+	fmt.Printf("[%s] DEBUG: Fetching assigned merge requests for user '%s'...\n", timestamp, d.config.GitLab.Username)
+
+	// Create a timeout context for the API call
+	apiCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Use a channel to make the API call cancellable
+	type result struct {
+		mergeRequests []gitlab.MergeRequest
+		err           error
+	}
+
+	resultCh := make(chan result, 1)
+	go func() {
+		// Get assigned merge requests
+		assignedMRs, err1 := d.gitlabClient.GetAssignedMergeRequests(d.config.GitLab.Username, "opened")
+		if err1 != nil {
+			resultCh <- result{mergeRequests: nil, err: err1}
+			return
+		}
+
+		// Get merge requests for review
+		reviewMRs, err2 := d.gitlabClient.GetMergeRequestsForReview(d.config.GitLab.Username, "opened")
+		if err2 != nil {
+			resultCh <- result{mergeRequests: nil, err: err2}
+			return
+		}
+
+		// Combine and deduplicate
+		allMRs := append(assignedMRs, reviewMRs...)
+		uniqueMRs := make(map[int]gitlab.MergeRequest)
+		for _, mr := range allMRs {
+			uniqueMRs[mr.IID] = mr
+		}
+
+		finalMRs := make([]gitlab.MergeRequest, 0, len(uniqueMRs))
+		for _, mr := range uniqueMRs {
+			finalMRs = append(finalMRs, mr)
+		}
+
+		resultCh <- result{mergeRequests: finalMRs, err: nil}
+	}()
+
+	// Wait for either the result or context cancellation
+	var mergeRequests []gitlab.MergeRequest
+	var err error
+	select {
+	case <-apiCtx.Done():
+		fmt.Printf("[%s] DEBUG: API call timed out or was cancelled\n", timestamp)
+		return 0, apiCtx.Err()
+	case res := <-resultCh:
+		mergeRequests = res.mergeRequests
+		err = res.err
+	}
+
+	if err != nil {
+		fmt.Printf("[%s] DEBUG: Failed to fetch merge requests: %v\n", timestamp, err)
+		return 0, fmt.Errorf("failed to fetch merge requests: %v", err)
+	}
+	fmt.Printf("[%s] DEBUG: Successfully fetched %d merge requests\n", timestamp, len(mergeRequests))
+
+	newMRs := 0
+	for _, mr := range mergeRequests {
+		// Check for cancellation between MRs
+		select {
+		case <-ctx.Done():
+			return newMRs, ctx.Err()
+		default:
+		}
+
+		if !processedMRs[mr.IID] {
+			processedMRs[mr.IID] = true
+			newMRs++
+
+			fmt.Printf("[%s] Found merge request for review: !%d - %s\n", timestamp, mr.IID, mr.Title)
+			fmt.Printf("[%s] MR URL: %s\n", timestamp, mr.WebURL)
+
+			// Process merge request with Claude
+			if err := d.processMergeRequestWithClaude(ctx, &mr); err != nil {
+				fmt.Printf("[%s] Failed to process merge request !%d: %v\n", timestamp, mr.IID, err)
+			} else {
+				fmt.Printf("[%s] Started Claude review for merge request !%d\n", timestamp, mr.IID)
+			}
+		}
+	}
+
+	return newMRs, nil
+}
+
+func (d *Daemon) processMergeRequestWithClaude(ctx context.Context, mr *gitlab.MergeRequest) error {
+	if d.dryRun {
+		fmt.Printf("[DRY RUN] Would process merge request !%d: %s\n", mr.IID, mr.Title)
+		return nil
+	} else if d.semiDryRun {
+		fmt.Printf("[SEMI-DRY RUN] Would process merge request !%d: %s\n", mr.IID, mr.Title)
+		return nil
+	}
+
+	// Create a Claude process for MR review
+	processID := fmt.Sprintf("mr-%d-%d", mr.IID, time.Now().Unix())
+	
+	// Custom prompt for merge request review
+	prompt := fmt.Sprintf(`# Review Merge Request !%d
+
+## Merge Request Information
+- **Title**: %s
+- **Source Branch**: %s
+- **Target Branch**: %s
+- **Author**: @%s
+- **URL**: %s
+
+## Review Instructions
+1. **Fetch the merge request details** using GitLab MCP tools
+2. **Analyze the changes** in the merge request
+3. **Review the code** for:
+   - Code quality and best practices
+   - Security vulnerabilities
+   - Performance issues
+   - Documentation completeness
+   - Test coverage
+4. **Check discussions** for any existing feedback
+5. **Provide comprehensive feedback** as a comment on the merge request
+
+## Review Criteria
+- Code follows project standards and conventions
+- Changes are well-documented
+- Security best practices are followed
+- Performance considerations are addressed
+- Tests are adequate and passing
+- No obvious bugs or issues
+
+Please provide constructive feedback and approve or request changes as appropriate.
+Use GitLab MCP tools to interact with the merge request.
+`, mr.IID, mr.Title, mr.SourceBranch, mr.TargetBranch, mr.Author.Username, mr.WebURL)
+
+	// Get project path from MR or use configured project
+	projectPath := d.selectedProject
+	if projectPath == "" {
+		projectPath = fmt.Sprintf("project-%d", mr.ProjectID)
+	}
+
+	process, err := claude.CreateProcessWithCallbackAndGitlabDryRun(
+		mr.IID,
+		processID,
+		d.config.Claude.Command,
+		d.config.Claude.Flags,
+		projectPath,
+		d.config.GitLab.Username,
+		d.config.GitLab.URL,
+		d.dryRun,
+		nil,
+		nil,
+		prompt,
+	)
+	if err != nil {
+		return fmt.Errorf("error creating claude process for MR: %v", err)
+	}
+
+	d.processManager.AddProcess(process)
+	claude.RunProcessAsync(process, d.processManager)
+
+	return nil
+}
+
 func (d *Daemon) checkForHumanReviewIssuesWithContext(ctx context.Context, processedIssues map[int]bool, timestamp string) (int, error) {
 	// Check if context is already cancelled
 	select {
@@ -1235,7 +1408,16 @@ func (d *Daemon) checkForReviewIssuesWithCommentsWithContext(ctx context.Context
 }
 
 func (d *Daemon) Run() error {
-	// Step 1: Select project interactively
+	// Step 1: Get current user info
+	fmt.Printf("=== GitLab Authentication ===\n")
+	currentUser, err := d.gitlabClient.GetCurrentUser()
+	if err != nil {
+		return fmt.Errorf("error fetching current user: %v", err)
+	}
+	fmt.Printf("Authenticated as: %s (@%s)\n", currentUser.Name, currentUser.Username)
+	fmt.Printf("User email: %s\n\n", currentUser.Email)
+
+	// Step 2: Select project interactively
 	fmt.Printf("=== Project Selection for Daemon Mode ===\n")
 	projects, err := d.gitlabClient.GetAccessibleProjects()
 	if err != nil {
@@ -1276,8 +1458,9 @@ func (d *Daemon) Run() error {
 		cancel()
 	}()
 
-	// Keep track of processed issues to avoid duplicates
+	// Keep track of processed items to avoid duplicates
 	processedIssues := make(map[int]bool)
+	processedMRs := make(map[int]bool)
 
 	ticker := time.NewTicker(time.Duration(d.config.Daemon.Interval) * time.Second)
 	defer ticker.Stop()
@@ -1355,7 +1538,19 @@ func (d *Daemon) Run() error {
 			}
 			fmt.Printf("[%s] DEBUG: Finished checkForNewClaudeIssues, found %d new issues\n", timestamp, newIssues)
 
-			// 2. Check for issues under review with new comments (resume sessions)
+			// 2. Check for assigned merge requests (new functionality)
+			fmt.Printf("[%s] DEBUG: Starting checkForMergeRequests...\n", timestamp)
+			newMRs, err := d.checkForMergeRequestsWithContext(ctx, processedMRs, timestamp)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Printf("[%s] Operation cancelled by user\n", timestamp)
+					continue
+				}
+				fmt.Printf("[%s] Error checking for merge requests: %v\n", timestamp, err)
+			}
+			fmt.Printf("[%s] DEBUG: Finished checkForMergeRequests, found %d new MRs\n", timestamp, newMRs)
+
+			// 3. Check for issues under review with new comments (resume sessions)
 			fmt.Printf("[%s] DEBUG: Starting checkForReviewIssuesWithComments...\n", timestamp)
 			resumedIssues, err := d.checkForReviewIssuesWithCommentsWithContext(ctx, timestamp)
 			if err != nil {
@@ -1368,8 +1563,8 @@ func (d *Daemon) Run() error {
 			fmt.Printf("[%s] DEBUG: Finished checkForReviewIssuesWithComments, resumed %d sessions\n", timestamp, resumedIssues)
 
 			// Summary
-			if newIssues > 0 || resumedIssues > 0 {
-				fmt.Printf("[%s] Activity: %d new sessions started, %d sessions resumed\n", timestamp, newIssues, resumedIssues)
+			if newIssues > 0 || newMRs > 0 || resumedIssues > 0 {
+				fmt.Printf("[%s] Activity: %d new issue sessions, %d MR reviews, %d resumed sessions\n", timestamp, newIssues, newMRs, resumedIssues)
 			} else {
 				fmt.Printf("[%s] No new activity found\n", timestamp)
 			}
@@ -1389,7 +1584,16 @@ func (d *Daemon) RunWithMemoryMode(memoryMode bool) error {
 }
 
 func (d *Daemon) RunWithoutMemory() error {
-	// Step 1: Select project interactively
+	// Step 1: Get current user info
+	fmt.Printf("=== GitLab Authentication ===\n")
+	currentUser, err := d.gitlabClient.GetCurrentUser()
+	if err != nil {
+		return fmt.Errorf("error fetching current user: %v", err)
+	}
+	fmt.Printf("Authenticated as: %s (@%s)\n", currentUser.Name, currentUser.Username)
+	fmt.Printf("User email: %s\n\n", currentUser.Email)
+
+	// Step 2: Select project interactively
 	fmt.Printf("=== Project Selection for Daemon Mode ===\n")
 	projects, err := d.gitlabClient.GetAccessibleProjects()
 	if err != nil {
@@ -1478,8 +1682,9 @@ func (d *Daemon) RunWithoutMemory() error {
 			default:
 			}
 
-			// Create fresh processed issues map for this polling cycle
+			// Create fresh processed items maps for this polling cycle
 			processedIssues := make(map[int]bool)
+			processedMRs := make(map[int]bool)
 
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
 			fmt.Printf("[%s] Checking for issues to process...\n", timestamp)
@@ -1496,6 +1701,18 @@ func (d *Daemon) RunWithoutMemory() error {
 			}
 			fmt.Printf("[%s] DEBUG: Finished checkForNewClaudeIssues, found %d new issues\n", timestamp, newIssues)
 
+			// Check for assigned merge requests (new functionality)
+			fmt.Printf("[%s] DEBUG: Starting checkForMergeRequests...\n", timestamp)
+			newMRs, err := d.checkForMergeRequestsWithContext(ctx, processedMRs, timestamp)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Printf("[%s] Operation cancelled by user\n", timestamp)
+					continue
+				}
+				fmt.Printf("[%s] Error checking for merge requests: %v\n", timestamp, err)
+			}
+			fmt.Printf("[%s] DEBUG: Finished checkForMergeRequests, found %d new MRs\n", timestamp, newMRs)
+
 			// Check for issues with 'waiting_human_review' label that have human comments
 			fmt.Printf("[%s] DEBUG: Starting checkForHumanReviewIssues...\n", timestamp)
 			reviewIssues, err := d.checkForHumanReviewIssuesWithContext(ctx, processedIssues, timestamp)
@@ -1509,9 +1726,9 @@ func (d *Daemon) RunWithoutMemory() error {
 			fmt.Printf("[%s] DEBUG: Finished checkForHumanReviewIssues, found %d issues with human comments\n", timestamp, reviewIssues)
 
 			// Summary
-			totalNewSessions := newIssues + reviewIssues
+			totalNewSessions := newIssues + newMRs + reviewIssues
 			if totalNewSessions > 0 {
-				fmt.Printf("[%s] Activity: %d new sessions started (%d claude label, %d human review)\n", timestamp, totalNewSessions, newIssues, reviewIssues)
+				fmt.Printf("[%s] Activity: %d new sessions started (%d claude label, %d MR reviews, %d human review)\n", timestamp, totalNewSessions, newIssues, newMRs, reviewIssues)
 			} else {
 				fmt.Printf("[%s] No new activity found\n", timestamp)
 			}
